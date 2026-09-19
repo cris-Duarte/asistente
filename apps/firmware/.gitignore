@@ -1,0 +1,23 @@
+# Build outputs
+build/
+build-*/
+*.bin
+*.elf
+*.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# ESP-IDF
+managed_components/
+dependencies.lock
