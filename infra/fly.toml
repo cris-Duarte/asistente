@@ -1,0 +1,50 @@
+# Fly.io configuration for ElectricSQL Sync Service
+# Deploy with: fly deploy -c infra/fly.toml
+
+app = "productivity-electric"
+primary_region = "gru"  # São Paulo, Brazil
+
+[build]
+  image = "electricsql/electric:latest"
+
+[env]
+  ELECTRIC_INSECURE = "false"
+  ELECTRIC_LOG_LEVEL = "info"
+  ELECTRIC_REPLICATION_STREAM_ID = "prod"
+  # DATABASE_URL and ELECTRIC_SECRET will be set as secrets
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[metrics]
+  port = 9090
+  path = "/metrics"
+
+[mounts]
+  source = "electric_data"
+  destination = "/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
+
+# Scale configuration
+[autoscaling]
+  enabled = false
+  min_machines = 1
+  max_machines = 3
+
+# Health checks
+[checks]
+  interval = "30s"
+  timeout = "10s"
+  grace_period = "30s"
+  method = "GET"
+  path = "/health"
+  port = 3000

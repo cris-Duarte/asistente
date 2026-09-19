@@ -1,0 +1,66 @@
+# Local Development Environment
+# Postgres + ElectricSQL Sync Service + API (via wrangler dev)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: productivity-postgres
+    environment:
+      POSTGRES_DB: productivity
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-sql:/docker-entrypoint-initdb.d
+    command:
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+      - -c
+      - listen_addresses=*
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d productivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  electric:
+    image: electricsql/electric:latest
+    container_name: productivity-electric
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/productivity?sslmode=disable
+      ELECTRIC_INSECURE: "true"
+      ELECTRIC_SECRET: "dev-secret-change-in-production"
+      ELECTRIC_LOG_LEVEL: "debug"
+      ELECTRIC_REPLICATION_STREAM_ID: "dev"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - electric_data:/data
+
+  # Redis for rate limiting / sessions (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: productivity-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+  electric_data:
+  redis_data:
