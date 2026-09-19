@@ -91,3 +91,7 @@ export function throttle<T extends (...args: any[]) => any>(
 export function generateId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
+
+export function uuid(v: string): string {
+  return v;
+}

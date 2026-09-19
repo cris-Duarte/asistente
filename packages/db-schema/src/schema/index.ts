@@ -32,7 +32,7 @@ export const tasks = pgTable('tasks', {
   description: text('description'),
   status: text('status', { enum: ['pending', 'active', 'paused', 'done', 'archived'] }).default('pending').notNull(),
   projectId: uuid('project_id').references(() => projects.id, { onDelete: 'set null' }),
-  parentTaskId: uuid('parent_task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  parentTaskId: uuid('parent_task_id'),
   sortOrder: integer('sort_order').default(0).notNull(),
   estimatedMinutes: integer('estimated_minutes'),
   totalTrackedSeconds: integer('total_tracked_seconds').default(0).notNull(),

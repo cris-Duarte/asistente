@@ -5,12 +5,12 @@ export const uuidSchema = z.string().uuid();
 
 export const isoDateSchema = z.string().datetime({ offset: true });
 
-export const taskMetadataSchema: z.ZodType<TaskMetadata> = z.object({
+export const taskMetadataSchema = z.object({
   tags: z.array(z.string()).default([]),
   energyLevel: z.enum(['low', 'medium', 'high']).default('medium'),
   context: z.enum(['deep_work', 'admin', 'creative', 'communication']).default('deep_work'),
   aiSuggestedBreakdown: z.array(z.object({
-    id: uuidSchema,
+    id: z.string().uuid(),
     title: z.string().min(1).max(200),
     completed: z.boolean().default(false),
     sortOrder: z.number().int().default(0),

@@ -10,12 +10,14 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.0",
-    "@electric-sql/pglite-sync": "^0.6.0",
     "@electric-sql/pglite-react": "^0.2.0",
-    "@productivity-assistant/shared": "workspace:*",
-    "@productivity-assistant/db-schema": "workspace:*"
+    "@electric-sql/pglite-sync": "^0.6.0",
+    "@productivity-assistant/db-schema": "workspace:*",
+    "@productivity-assistant/shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/react": "^18.3.31",
+    "react": "^18.3.1",
     "typescript": "^5.5.0"
   }
 }

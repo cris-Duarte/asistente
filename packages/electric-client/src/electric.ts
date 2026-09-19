@@ -1,7 +1,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { electricSync } from '@electric-sql/pglite-sync';
 import { live } from '@electric-sql/pglite/live';
-import type { Task, TimeEntry, Project, SyncState } from '@productivity-assistant/shared';
+import type { Task, TimeEntry, Project, SyncState, UUID, ISODateString } from '@productivity-assistant/shared';
 
 export interface ElectricClientConfig {
   electricUrl: string;
@@ -17,8 +17,66 @@ export interface ShapeSubscription {
   error: Error | null;
 }
 
+// Type augmentation for PGlite with extensions
+interface ExtendedPGlite extends PGlite {
+  electric: {
+    syncShapeToTable: (options: any) => Promise<any>;
+  };
+  live: {
+    query: (sql: string, params: any[]) => any;
+  };
+}
+
+interface ExtendedPGlite extends PGlite {
+  electric: {
+    syncShapeToTable: (options: any) => Promise<any>;
+  };
+  live: {
+    query: (sql: string, params: any[]) => any;
+  };
+}
+
+// Helper functions to cast rows to proper branded types
+function castTaskRows(rows: any[]): Task[] {
+  return rows.map(row => ({
+    ...row,
+    id: row.id as UUID,
+    userId: row.user_id as UUID,
+    projectId: row.project_id as UUID | undefined,
+    parentTaskId: row.parent_task_id as UUID | undefined,
+    createdAt: row.created_at as ISODateString,
+    updatedAt: row.updated_at as ISODateString,
+    deletedAt: row.deleted_at as ISODateString | undefined,
+    metadata: row.metadata ? JSON.parse(row.metadata) : {},
+  }));
+}
+
+function castTimeEntryRows(rows: any[]): TimeEntry[] {
+  return rows.map(row => ({
+    ...row,
+    id: row.id as UUID,
+    taskId: row.task_id as UUID,
+    userId: row.user_id as UUID,
+    startedAt: row.started_at as ISODateString,
+    endedAt: row.ended_at as ISODateString | undefined,
+    syncedAt: row.synced_at as ISODateString,
+    metadata: row.metadata ? JSON.parse(row.metadata) : {},
+  }));
+}
+
+function castProjectRows(rows: any[]): Project[] {
+  return rows.map(row => ({
+    ...row,
+    id: row.id as UUID,
+    userId: row.user_id as UUID,
+    createdAt: row.created_at as ISODateString,
+    updatedAt: row.updated_at as ISODateString,
+    archivedAt: row.archived_at as ISODateString | undefined,
+  }));
+}
+
 export class ElectricClient {
-  private pg: PGlite | null = null;
+  private pg: ExtendedPGlite | null = null;
   private config: ElectricClientConfig | null = null;
   private subscriptions: Map<string, ShapeSubscription> = new Map();
   private isInitialized = false;
@@ -32,13 +90,15 @@ export class ElectricClient {
     this.config = config;
     const persistenceKey = config.persistenceKey || `electric-${config.userId}`;
 
-    this.pg = await PGlite.create({
+    const pg = await PGlite.create({
       dataDir: `idb://${persistenceKey}`,
       extensions: {
         electric: electricSync(),
         live,
       },
-    });
+    }) as ExtendedPGlite;
+
+    this.pg = pg;
 
     // Create tables matching backend schema
     await this.createTables();
@@ -168,7 +228,7 @@ export class ElectricClient {
       table,
       primaryKey,
       shapeKey,
-      onError: (error) => {
+      onError: (error: Error) => {
         console.error(`Sync error for ${shapeKey}:`, error);
         const sub = this.subscriptions.get(shapeKey);
         if (sub) {
@@ -184,7 +244,6 @@ export class ElectricClient {
       error: null,
     };
 
-    // Listen for initial sync completion
     subscription.stream.on('headers', () => {
       shapeSub.isSynced = true;
     });
@@ -195,7 +254,7 @@ export class ElectricClient {
   async queryTasks(): Promise<Task[]> {
     if (!this.pg) throw new Error('PGlite not initialized');
     const result = await this.pg.query('SELECT * FROM tasks WHERE user_id = $1 AND deleted_at IS NULL ORDER BY sort_order DESC, created_at DESC', [this.config!.userId]);
-    return result.rows as Task[];
+    return castTaskRows(result.rows);
   }
 
   async queryTimeEntries(taskId?: string): Promise<TimeEntry[]> {
@@ -208,13 +267,13 @@ export class ElectricClient {
     }
     query += ' ORDER BY started_at DESC';
     const result = await this.pg.query(query, params);
-    return result.rows as TimeEntry[];
+    return castTimeEntryRows(result.rows);
   }
 
   async queryProjects(): Promise<Project[]> {
     if (!this.pg) throw new Error('PGlite not initialized');
     const result = await this.pg.query('SELECT * FROM projects WHERE user_id = $1 AND archived_at IS NULL ORDER BY sort_order DESC, created_at DESC', [this.config!.userId]);
-    return result.rows as Project[];
+    return castProjectRows(result.rows);
   }
 
   // Live queries for reactive UI
@@ -241,8 +300,7 @@ export class ElectricClient {
   }
 
   // Write operations (go through API, not direct ElectricSQL)
-  async createTask(task: Omit<Task, 'id' | 'created_at' | 'updated_at' | 'version'>): Promise<void> {
-    // Mutations go through API, ElectricSQL syncs them back
+  async createTask(task: Omit<Task, 'id' | 'createdAt' | 'updatedAt' | 'version' | 'created_at' | 'updated_at'>): Promise<void> {
     const response = await fetch(`${this.config!.electricUrl.replace('/v1/shape', '')}/api/tasks`, {
       method: 'POST',
       headers: {
@@ -279,7 +337,7 @@ export class ElectricClient {
     if (!response.ok) throw new Error('Failed to delete task');
   }
 
-  async createTimeEntry(entry: Omit<TimeEntry, 'id' | 'synced_at' | 'duration_seconds'>): Promise<void> {
+  async createTimeEntry(entry: Omit<TimeEntry, 'id' | 'synced_at' | 'duration_seconds' | 'version' | 'createdAt' | 'updatedAt' | 'created_at' | 'updated_at'>): Promise<void> {
     const response = await fetch(`${this.config!.electricUrl.replace('/v1/shape', '')}/api/time-entries`, {
       method: 'POST',
       headers: {

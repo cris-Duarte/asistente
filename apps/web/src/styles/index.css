@@ -5,6 +5,11 @@
 @layer base {
   :root {
     --color-primary: 59 130 246;
+    --grid-stroke: #e5e7eb;
+  }
+
+  .dark {
+    --grid-stroke: #374151;
   }
 
   html {

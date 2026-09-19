@@ -1,11 +1,16 @@
-import { User, Bell, Palette, Database, Shield, LogOut, Moon, Sun, Download, Upload, Key } from 'lucide-react';
-import { useState } from 'react';
+import { User, Bell, Palette, Database, Shield, LogOut, Moon, Sun, Download, Upload, Key, Fingerprint, Trash2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Label } from '@/components/ui/Label';
 import { Switch } from '@/components/ui/Switch';
 import { Separator } from '@/components/ui/Separator';
+import { cn } from '@/lib/utils';
+import { useAuthStore } from '@/stores/authStore';
+import { PasskeyManager } from '@/components/auth/PasskeyManager';
+import { SyncStatusDetail } from '@/components/SyncStatusIndicator';
+import { toastHelpers } from '@/components/ui/Toaster';
 
 const settingsSections = [
   { id: 'profile', label: 'Perfil', icon: User },
@@ -16,10 +21,39 @@ const settingsSections = [
 ];
 
 export function Settings() {
+  const { user, updateUser, logout } = useAuthStore();
   const [activeSection, setActiveSection] = useState('profile');
   const [darkMode, setDarkMode] = useState(false);
   const [notifications, setNotifications] = useState({ email: true, push: true, daily: false });
   const [syncEnabled, setSyncEnabled] = useState(true);
+
+  useEffect(() => {
+    const savedDarkMode = localStorage.getItem('darkMode');
+    if (savedDarkMode !== null) {
+      setDarkMode(savedDarkMode === 'true');
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('darkMode', String(darkMode));
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [darkMode]);
+
+  const handleExportJSON = () => {
+    toastHelpers.info('Próximamente', 'Exportación JSON en desarrollo');
+  };
+
+  const handleExportCSV = () => {
+    toastHelpers.info('Próximamente', 'Exportación CSV en desarrollo');
+  };
+
+  const handleImportData = () => {
+    toastHelpers.info('Próximamente', 'Importación en desarrollo');
+  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -60,22 +94,22 @@ export function Settings() {
                     <User className="h-8 w-8" />
                   </div>
                   <div>
-                    <p className="font-medium text-gray-900 dark:text-gray-100">Cristhian Duarte</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">cristhian@example.com</p>
+                    <p className="font-medium text-gray-900 dark:text-gray-100">{user?.name || 'Usuario'}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{user?.email || 'email@example.com'}</p>
                   </div>
                 </div>
                 <Separator />
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
                     <Label htmlFor="name">Nombre</Label>
-                    <Input id="name" defaultValue="Cristhian Duarte" />
+                    <Input id="name" defaultValue={user?.name || ''} onChange={e => updateUser({ name: e.target.value })} />
                   </div>
                   <div>
                     <Label htmlFor="email">Email</Label>
-                    <Input id="email" type="email" defaultValue="cristhian@example.com" />
+                    <Input id="email" type="email" defaultValue={user?.email || ''} disabled />
                   </div>
                 </div>
-                <Button>Guardar cambios</Button>
+                <Button onClick={() => toastHelpers.success('Guardado', 'Perfil actualizado correctamente')}>Guardar cambios</Button>
               </div>
             </Card>
           )}
@@ -134,56 +168,70 @@ export function Settings() {
           )}
 
           {activeSection === 'data' && (
-            <Card>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Datos y sincronización</h2>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-gray-100">Sincronización automática</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Sincronizar cambios automáticamente con la nube</p>
+            <div className="space-y-6">
+              <Card>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Sincronización</h2>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-gray-100">Sincronización automática</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Sincronizar cambios automáticamente con la nube (ElectricSQL)</p>
+                    </div>
+                    <Switch checked={syncEnabled} onCheckedChange={setSyncEnabled} />
                   </div>
-                  <Switch checked={syncEnabled} onCheckedChange={setSyncEnabled} />
+                  <Separator />
+                  <SyncStatusDetail />
                 </div>
-                <Separator />
-                <div className="flex flex-wrap gap-3">
-                  <Button variant="outline" asChild>
-                    <a href="#" download><Download className="h-4 w-4 mr-2" /> Exportar datos (JSON)</a>
-                  </Button>
-                  <Button variant="outline" asChild>
-                    <a href="#" download><Download className="h-4 w-4 mr-2" /> Exportar datos (CSV)</a>
-                  </Button>
-                  <Button variant="outline"><Upload className="h-4 w-4 mr-2" /> Importar datos</Button>
+              </Card>
+
+              <Card>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Backup y Exportación</h2>
+                <div className="space-y-4">
+                  <div className="flex flex-wrap gap-3">
+                    <Button variant="outline" onClick={handleExportJSON}>
+                      <Download className="h-4 w-4 mr-2" /> Exportar JSON
+                    </Button>
+                    <Button variant="outline" onClick={handleExportCSV}>
+                      <Download className="h-4 w-4 mr-2" /> Exportar CSV
+                    </Button>
+                    <Button variant="outline" onClick={handleImportData}>
+                      <Upload className="h-4 w-4 mr-2" /> Importar
+                    </Button>
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Los backups automáticos se guardan diariamente en Cloudflare R2.
+                  </p>
                 </div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Los backups automáticos se guardan diariamente en Cloudflare R2.
-                </p>
-              </div>
-            </Card>
+              </Card>
+            </div>
           )}
 
           {activeSection === 'security' && (
-            <Card>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Seguridad</h2>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 rounded-lg border border-gray-200 dark:border-gray-700">
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-gray-100">Passkeys (WebAuthn)</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Autenticación sin contraseña, resistente a phishing</p>
+            <div className="space-y-6">
+              <PasskeyManager />
+              
+              <Card>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Sesiones activas</h2>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-primary-100 flex items-center justify-center text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">
+                        <Fingerprint className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Sesión actual</p>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">Este navegador · Activa ahora</p>
+                      </div>
+                    </div>
+                    <span className="badge badge-success">Actual</span>
                   </div>
-                  <Button variant="outline"><Key className="h-4 w-4 mr-2" /> Gestionar passkeys</Button>
                 </div>
                 <Separator />
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-gray-100">Sesiones activas</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">1 sesión actual (este navegador)</p>
-                  </div>
-                  <Button variant="ghost" size="sm">Ver todas</Button>
-                </div>
-                <Separator />
-                <Button variant="danger"><LogOut className="h-4 w-4 mr-2" /> Cerrar sesión en todos los dispositivos</Button>
-              </div>
-            </Card>
+                <Button variant="danger" onClick={logout}>
+                  <LogOut className="h-4 w-4 mr-2" /> Cerrar sesión en todos los dispositivos
+                </Button>
+              </Card>
+            </div>
           )}
         </div>
       </div>

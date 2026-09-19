@@ -14,17 +14,23 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
-    "hono": "^4.4.0",
-    "zod": "^3.23.0",
-    "jose": "^5.4.0",
-    "@simplewebauthn/server": "^10.0.0",
+    "@hono/zod-validator": "^0.9.1",
+    "@productivity-assistant/db-schema": "workspace:*",
+    "@productivity-assistant/electric-client": "workspace:*",
     "@productivity-assistant/shared": "workspace:*",
-    "@productivity-assistant/db-schema": "workspace:*"
+    "@simplewebauthn/server": "^10.0.1",
+    "drizzle-orm": "^0.32.0",
+    "hono": "^4.13.8",
+    "jose": "^5.10.0",
+    "postgres": "^3.4.0",
+    "uuid": "^14.0.2",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240529.0",
-    "wrangler": "^3.60.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/uuid": "^11.0.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
+    "vitest": "^2.0.0",
+    "wrangler": "^3.60.0"
   }
 }

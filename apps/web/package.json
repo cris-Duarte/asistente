@@ -14,16 +14,20 @@
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-router-dom": "^6.24.0",
     "@tanstack/react-query": "^5.40.0",
     "@electric-sql/pglite": "^0.2.0",
     "@electric-sql/pglite-react": "^0.2.0",
     "@electric-sql/pglite-sync": "^0.6.0",
+    "@simplewebauthn/browser": "^10.0.0",
     "zustand": "^4.5.0",
     "date-fns": "^3.6.0",
+    "recharts": "^2.12.0",
     "lucide-react": "^0.400.0",
     "clsx": "^2.1.0",
     "tailwind-merge": "^2.3.0",
-    "@productivity-assistant/shared": "workspace:*"
+    "@productivity-assistant/shared": "workspace:*",
+    "@productivity-assistant/electric-client": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",

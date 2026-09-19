@@ -2,16 +2,19 @@ import { forwardRef, SelectHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronUp, Check } from 'lucide-react';
 
-export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {}
+export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+  onValueChange?: (value: string) => void;
+}
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ className, children, ...props }, ref) => (
+  ({ className, children, onValueChange, ...props }, ref) => (
     <select
       ref={ref}
       className={cn(
         'flex h-10 w-full items-center justify-between rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100',
         className
       )}
+      onChange={e => onValueChange?.(e.target.value)}
       {...props}
     >
       {children}

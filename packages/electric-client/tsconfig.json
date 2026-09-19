@@ -3,7 +3,7 @@
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
@@ -13,11 +13,9 @@
     "baseUrl": ".",
     "paths": {
       "@productivity-assistant/shared/*": ["../../packages/shared/src/*"],
-      "@productivity-assistant/db-schema/*": ["../../packages/db-schema/src/*"],
-      "@productivity-assistant/electric-client/*": ["../../packages/electric-client/src/*"]
-    },
-    "types": ["@cloudflare/workers-types"]
+      "@productivity-assistant/db-schema/*": ["../../packages/db-schema/src/*"]
+    }
   },
-  "include": ["src/**/*", "worker-configuration.d.ts"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

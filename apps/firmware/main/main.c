@@ -45,6 +45,11 @@ static const char *TAG = "MAIN";
 #define SYNC_INTERVAL_MS 30000
 #define WIFI_RECONNECT_INTERVAL_MS 60000
 
+// Event bits
+#define WIFI_CONNECTED_BIT      BIT0
+#define SYNC_REQUEST_BIT        BIT1
+#define OTA_UPDATE_BIT          BIT2
+
 // Global state
 static char device_id[DEVICE_ID_MAX_LEN];
 static EventGroupHandle_t sync_events;

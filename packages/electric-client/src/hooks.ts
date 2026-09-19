@@ -51,13 +51,13 @@ export function useTasks(userId: string) {
   const [error, setError] = useState<Error | null>(null);
 
   const liveTasks = useLiveQuery(
-    electricClient.liveTasks.bind(electricClient),
+    `SELECT * FROM tasks WHERE user_id = $1 AND deleted_at IS NULL ORDER BY sort_order DESC, created_at DESC`,
     [userId]
   );
 
   useEffect(() => {
     if (liveTasks) {
-      setTasks(liveTasks.rows as Task[]);
+      setTasks(liveTasks as unknown as Task[]);
       setIsLoading(false);
     }
   }, [liveTasks]);
@@ -70,14 +70,16 @@ export function useTimeEntries(taskId?: string) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const liveEntries = useLiveQuery(
-    electricClient.liveTimeEntries.bind(electricClient),
-    [taskId]
-  );
+  const query = taskId
+    ? `SELECT * FROM time_entries WHERE user_id = $1 AND task_id = $2 ORDER BY started_at DESC`
+    : `SELECT * FROM time_entries WHERE user_id = $1 ORDER BY started_at DESC`;
+  const params = taskId ? [undefined, taskId] : [undefined];
+
+  const liveEntries = useLiveQuery(query, params);
 
   useEffect(() => {
     if (liveEntries) {
-      setEntries(liveEntries.rows as TimeEntry[]);
+      setEntries(liveEntries as unknown as TimeEntry[]);
       setIsLoading(false);
     }
   }, [liveEntries]);
@@ -91,13 +93,13 @@ export function useProjects() {
   const [error, setError] = useState<Error | null>(null);
 
   const liveProjects = useLiveQuery(
-    electricClient.liveProjects.bind(electricClient),
-    []
+    `SELECT * FROM projects WHERE user_id = $1 AND archived_at IS NULL ORDER BY sort_order DESC, created_at DESC`,
+    [undefined]
   );
 
   useEffect(() => {
     if (liveProjects) {
-      setProjects(liveProjects.rows as Project[]);
+      setProjects(liveProjects as unknown as Project[]);
       setIsLoading(false);
     }
   }, [liveProjects]);
@@ -105,16 +107,16 @@ export function useProjects() {
   return { projects, isLoading, error, refetch: () => electricClient.queryProjects() };
 }
 
-export function useActiveTask() {
-  const { tasks } = useTasks('');
+export function useActiveTask(userId: string) {
+  const { tasks } = useTasks(userId);
   const activeTask = tasks.find(t => t.status === 'active');
   return activeTask;
 }
 
 export function useTimer(taskId?: string) {
   const { entries } = useTimeEntries(taskId);
-  const activeEntry = entries.find(e => !e.ended_at);
-  const totalTracked = entries.reduce((sum, e) => sum + (e.duration_seconds || 0), 0);
+  const activeEntry = entries.find(e => !e.endedAt);
+  const totalTracked = entries.reduce((sum: number, e: TimeEntry) => sum + (e.durationSeconds || 0), 0);
 
   return {
     activeEntry,
