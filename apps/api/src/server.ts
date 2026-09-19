@@ -95,7 +95,7 @@ async function generateRegistrationOptionsForUser(userId: string) {
   if (user.length === 0) throw new Error('User not found');
 
   const existingCredentials = user[0].passkeyCredentialId
-    ? [{ id: user[0].passkeyCredentialId, type: 'public-key' as const, transports: ['internal'] as const }]
+    ? [{ id: user[0].passkeyCredentialId, type: 'public-key' , transports: ['internal']  }]
     : [];
 
   const options = generateRegistrationOptions({
@@ -111,8 +111,7 @@ async function generateRegistrationOptionsForUser(userId: string) {
       userVerification: 'required',
       residentKey: 'preferred',
     },
-    supportedAlgorithmIDs: [-7, -257],
-  );
+  });
 
   return options;
 }
@@ -162,8 +161,8 @@ async function generateAuthenticationOptionsForUser(userId: string) {
     allowCredentials: [
       {
         id: user[0].passkeyCredentialId,
-        type: 'public-key' as const,
-        transports: ['internal', 'hybrid'] as const,
+        type: 'public-key' ,
+        transports: ['internal', 'hybrid']
       },
     ],
     userVerification: 'required',
@@ -313,7 +312,7 @@ app.get('/api/tasks/:id', async (c) => {
   }
 
   return c.json({ success: true, data: task[0] });
-}
+});
 
 app.post('/api/tasks', zValidator('json', createTaskInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -339,7 +338,7 @@ app.post('/api/tasks', zValidator('json', createTaskInputSchema), async (c) => {
   });
 
   return c.json({ success: true, data: newTask }, 201);
-}
+});
 
 app.patch('/api/tasks/:id', zValidator('json', updateTaskInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -370,7 +369,7 @@ app.patch('/api/tasks/:id', zValidator('json', updateTaskInputSchema), async (c)
   });
 
   return c.json({ success: true, data: updated });
-}
+});
 
 app.delete('/api/tasks/:id', async (c) => {
   const userId = c.get('userId');
@@ -399,7 +398,7 @@ app.delete('/api/tasks/:id', async (c) => {
   });
 
   return c.json({ success: true, data: { id, deleted: true } });
-}
+});
 
 app.get('/api/time-entries', zValidator('query', paginatedQuerySchema.extend({
   taskId: z.string().uuid().optional(),
@@ -461,7 +460,7 @@ app.post('/api/time-entries', zValidator('json', createTimeEntryInputSchema), as
   });
 
   return c.json({ success: true, data: newEntry }, 201);
-}
+});
 
 app.patch('/api/time-entries/:id', zValidator('json', updateTimeEntryInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -483,7 +482,7 @@ app.patch('/api/time-entries/:id', zValidator('json', updateTimeEntryInputSchema
     .returning();
 
   return c.json({ success: true, data: updated });
-}
+});
 
 app.get('/api/projects', zValidator('query', paginatedQuerySchema), async (c) => {
   const userId = c.get('userId');
@@ -510,7 +509,7 @@ app.get('/api/projects', zValidator('query', paginatedQuerySchema), async (c) =>
       hasMore: offset + items.length < totalResult[0].count,
     },
   });
-}
+});
 
 app.post('/api/projects', zValidator('json', createProjectInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -543,7 +542,7 @@ app.patch('/api/projects/:id', zValidator('json', updateProjectInputSchema), asy
     .returning();
 
   return c.json({ success: true, data: updated });
-}
+});
 
 app.delete('/api/projects/:id', async (c) => {
   const userId = c.get('userId');
@@ -562,7 +561,7 @@ app.delete('/api/projects/:id', async (c) => {
     .where(eq(projects.id, id));
 
   return c.json({ success: true, data: { id, archived: true } });
-}
+});
 
 app.get('/api/websocket', async (c) => {
   const upgradeHeader = c.req.header('Upgrade');

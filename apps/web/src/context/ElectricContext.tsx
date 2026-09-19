@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { electricClient, type ElectricClientConfig } from '@productivity-assistant/electric-client';
-import { useAuthStore } from '@/stores/authStore';
-import { toastHelpers } from '@/components/ui/Toaster';
+import { electricClient, type ElectricClientConfig } from '../lib/electric';
+import { useAuthStore } from '../stores/authStore';
+import { toastHelpers } from '../components/ui/Toaster';
 
 interface ElectricProviderProps {
   children: ReactNode;

@@ -2,6 +2,7 @@ import { Bell, Search, Sun, Moon, User, LogOut, ChevronDown } from 'lucide-react
 import { useState, useRef, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/authStore';
+import { SyncStatusIndicator } from '@/components/SyncStatusIndicator';
 
 export function Header() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -61,6 +62,8 @@ export function Header() {
         >
           {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
         </button>
+
+        <SyncStatusIndicator showLabel={false} />
 
         <div className="relative" ref={notificationsRef}>
           <button

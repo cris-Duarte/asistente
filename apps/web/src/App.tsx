@@ -4,6 +4,7 @@ import { Toaster } from '@/components/ui/Toaster';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { LoadingScreen } from '@/components/ui/LoadingScreen';
+import { ElectricProvider } from '@/context/ElectricContext';
 import { useAuthStore } from '@/stores/authStore';
 
 const Dashboard = lazy(() => import('@/pages/Dashboard').then(m => ({ default: m.Dashboard })));
@@ -64,28 +65,30 @@ function AppLayout() {
 function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        <Suspense fallback={<LoadingScreen />}>
-          <Routes>
-            <Route element={<PublicRoute />}>
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Login />} />
-            </Route>
-            <Route element={<ProtectedRoute />}>
-              <Route element={<AppLayout />}>
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/tasks" element={<Tasks />} />
-                <Route path="/timer" element={<Timer />} />
-                <Route path="/reports" element={<Reports />} />
-                <Route path="/settings" element={<Settings />} />
+      <ElectricProvider>
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+          <Suspense fallback={<LoadingScreen />}>
+            <Routes>
+              <Route element={<PublicRoute />}>
+                <Route path="/login" element={<Login />} />
+                <Route path="/register" element={<Login />} />
               </Route>
-            </Route>
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        </Suspense>
-        <Toaster />
-      </div>
+              <Route element={<ProtectedRoute />}>
+                <Route element={<AppLayout />}>
+                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/tasks" element={<Tasks />} />
+                  <Route path="/timer" element={<Timer />} />
+                  <Route path="/reports" element={<Reports />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Route>
+              </Route>
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            </Routes>
+          </Suspense>
+          <Toaster />
+        </div>
+      </ElectricProvider>
     </BrowserRouter>
   );
 }
