@@ -3,6 +3,13 @@ main = "src/index.ts"
 compatibility_date = "2024-09-19"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/productivity?sslmode=disable"
+DATABASE_URL_UNPOOLED = "postgresql://postgres:postgres@127.0.0.1:5432/productivity?sslmode=disable"
+JWT_SECRET = "dev-jwt-secret-at-least-32-characters-long"
+ELECTRIC_URL = "http://localhost:3000"
+ELECTRIC_SECRET = "dev-secret"
+
 [env]
 # Production environment
 [env.production]
@@ -16,6 +23,11 @@ vars = { ENVIRONMENT = "preview" }
 [[durable_objects.bindings]]
 name = "WEBSOCKET_SERVER"
 class_name = "WebSocketServer"
+
+# Durable Object exports (required for Wrangler 4.x)
+[exports.WebSocketServer]
+type = "durable-object"
+storage = "sqlite"
 
 # KV for session storage (optional)
 # [[kv_namespaces]]

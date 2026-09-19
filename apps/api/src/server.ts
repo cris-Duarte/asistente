@@ -1,5 +1,21 @@
-import './polyfill';
+#!/usr/bin/env node
 
+// Load environment variables first
+import { config } from 'dotenv';
+import { resolve } from 'path';
+
+config({ path: resolve(process.cwd(), '../../.env') });
+
+// Verify DATABASE_URL is loaded
+if (!process.env.DATABASE_URL) {
+  console.error('ERROR: DATABASE_URL not set');
+  process.exit(1);
+}
+
+console.log('DATABASE_URL loaded:', process.env.DATABASE_URL?.substring(0, 50) + '...');
+
+// Now import the main server
+import { createServer } from 'http';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
@@ -13,18 +29,206 @@ import { db } from '@productivity-assistant/db-schema';
 import { tasks, timeEntries, projects, users, domainEvents } from '@productivity-assistant/db-schema';
 import { eq, desc, and, gte, lte, sql, count } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
+import { SignJWT, jwtVerify } from 'jose';
+import { generateRegistrationOptions, verifyRegistrationResponse } from '@simplewebauthn/server';
+import { generateAuthenticationOptions, verifyAuthenticationResponse } from '@simplewebauthn/server';
+import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
+import { createServer as createHttpServer } from 'http';
 
-type Bindings = {
-  WEBSOCKET_SERVER: DurableObjectNamespace;
-  BACKUPS: R2Bucket;
-  DATABASE_URL: string;
-  DATABASE_URL_UNPOOLED: string;
-  JWT_SECRET: string;
-  ELECTRIC_URL: string;
-  ELECTRIC_SECRET: string;
+// Polyfill for process global
+globalThis.process = globalThis.process || {
+  env: {},
+  version: '',
+  versions: {},
+  platform: 'node',
+  nextTick: (fn: Function) => setTimeout(fn, 0),
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+const JWT_SECRET = new TextEncoder().encode(
+  process.env.JWT_SECRET || 'dev-jwt-secret-at-least-32-characters-long!!'
+);
+
+const ISSUER = 'productivity-assistant';
+const AUDIENCE = 'productivity-assistant-client';
+
+async function createAccessToken(userId: string, deviceId: string): Promise<string> {
+  return new SignJWT({ sub: userId, deviceId })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuedAt()
+    .setIssuer(ISSUER)
+    .setAudience(AUDIENCE)
+    .setExpirationTime('15m')
+    .sign(JWT_SECRET);
+}
+
+async function createRefreshToken(userId: string, deviceId: string): Promise<string> {
+  return new SignJWT({ sub: userId, deviceId, type: 'refresh' })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuedAt()
+    .setIssuer(ISSUER)
+    .setAudience(AUDIENCE)
+    .setExpirationTime('7d')
+    .sign(JWT_SECRET);
+}
+
+async function verifyToken(token: string): Promise<{ userId: string; deviceId: string } | null> {
+  try {
+    const { payload } = await jwtVerify(token, JWT_SECRET, {
+      issuer: ISSUER,
+      audience: AUDIENCE,
+    });
+    return {
+      userId: payload.sub as string,
+      deviceId: payload.deviceId as string,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const RP_NAME = 'Productivity Assistant';
+const RP_ID = 'localhost';
+const ORIGIN = 'http://localhost:5173';
+
+async function generateRegistrationOptionsForUser(userId: string) {
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (user.length === 0) throw new Error('User not found');
+
+  const existingCredentials = user[0].passkeyCredentialId
+    ? [{ id: user[0].passkeyCredentialId, type: 'public-key' as const, transports: ['internal'] as const }]
+    : [];
+
+  const options = generateRegistrationOptions({
+    rpName: RP_NAME,
+    rpID: RP_ID,
+    userID: userId,
+    userName: user[0].email,
+    userDisplayName: user[0].email,
+    attestationType: 'none',
+    excludeCredentials: existingCredentials,
+    authenticatorSelection: {
+      authenticatorAttachment: 'platform',
+      userVerification: 'required',
+      residentKey: 'preferred',
+    },
+    supportedAlgorithmIDs: [-7, -257],
+  );
+
+  return options;
+}
+
+async function verifyRegistration(
+  userId: string,
+  response: any,
+  expectedChallenge: string
+) {
+  const verification = await verifyRegistrationResponse({
+    response,
+    expectedChallenge,
+    expectedOrigin: ORIGIN,
+    expectedRPID: RP_ID,
+    requireUserVerification: true,
+  });
+
+  if (!verification.verified || !verification.registrationInfo) {
+    throw new Error('Registration verification failed');
+  }
+
+  const { credentialID, credentialPublicKey, counter } = verification.registrationInfo;
+
+  await db.update(users)
+    .set({
+      passkeyCredentialId: credentialID,
+      publicKey: Buffer.from(credentialPublicKey).toString('base64'),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(users.id, userId));
+
+  return {
+    credentialId: credentialID,
+    publicKey: credentialPublicKey,
+    counter,
+  };
+}
+
+async function generateAuthenticationOptionsForUser(userId: string) {
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (user.length === 0 || !user[0].passkeyCredentialId) {
+    throw new Error('No passkey registered for user');
+  }
+
+  const options = generateAuthenticationOptions({
+    rpID: RP_ID,
+    allowCredentials: [
+      {
+        id: user[0].passkeyCredentialId,
+        type: 'public-key' as const,
+        transports: ['internal', 'hybrid'] as const,
+      },
+    ],
+    userVerification: 'required',
+  );
+
+  return options;
+}
+
+async function verifyAuthentication(
+  userId: string,
+  response: any,
+  expectedChallenge: string
+) {
+  const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (user.length === 0 || !user[0].passkeyCredentialId || !user[0].publicKey) {
+    throw new Error('No passkey registered for user');
+  }
+
+  const verification = await verifyAuthenticationResponse({
+    response,
+    expectedChallenge,
+    expectedOrigin: ORIGIN,
+    expectedRPID: RP_ID,
+    authenticator: {
+      credentialID: user[0].passkeyCredentialId,
+      credentialPublicKey: Buffer.from(user[0].publicKey, 'base64'),
+      counter: 0,
+    },
+    requireUserVerification: true,
+  });
+
+  if (!verification.verified) {
+    throw new Error('Authentication verification failed');
+  }
+
+  return true;
+}
+
+async function createUser(email: string) {
+  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  const userId = uuidv4();
+  const [newUser] = await db.insert(users).values({
+    id: userId,
+    email,
+    publicKey: '',
+  }).returning();
+
+  return newUser;
+}
+
+async function getUserByEmail(email: string) {
+  const user = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return user[0] || null;
+}
+
+async function getUserById(id: string) {
+  const user = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return user[0] || null;
+}
+
+const app = new Hono();
 
 app.use('*', logger());
 app.use('*', secureHeaders());
@@ -47,7 +251,7 @@ app.onError((err, c) => {
 
 app.notFound((c) => {
   return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Route not found' } }, 404);
-});
+}
 
 const authMiddleware = async (c: any, next: any) => {
   const authHeader = c.req.header('Authorization');
@@ -55,10 +259,11 @@ const authMiddleware = async (c: any, next: any) => {
     throw new HTTPException(401, { message: 'Unauthorized' });
   }
   const token = authHeader.slice(7);
-  // TODO: Verify JWT token
-  // For now, we'll use a simple user ID from header for development
-  const userId = c.req.header('X-User-ID') || '00000000-0000-0000-0000-000000000000';
-  c.set('userId', userId);
+  const payload = await verifyToken(token);
+  if (!payload) {
+    throw new HTTPException(401, { message: 'Invalid token' });
+  }
+  c.set('userId', payload.userId);
   await next();
 };
 
@@ -108,7 +313,7 @@ app.get('/api/tasks/:id', async (c) => {
   }
 
   return c.json({ success: true, data: task[0] });
-});
+}
 
 app.post('/api/tasks', zValidator('json', createTaskInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -134,7 +339,7 @@ app.post('/api/tasks', zValidator('json', createTaskInputSchema), async (c) => {
   });
 
   return c.json({ success: true, data: newTask }, 201);
-});
+}
 
 app.patch('/api/tasks/:id', zValidator('json', updateTaskInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -165,7 +370,7 @@ app.patch('/api/tasks/:id', zValidator('json', updateTaskInputSchema), async (c)
   });
 
   return c.json({ success: true, data: updated });
-});
+}
 
 app.delete('/api/tasks/:id', async (c) => {
   const userId = c.get('userId');
@@ -180,7 +385,7 @@ app.delete('/api/tasks/:id', async (c) => {
     throw new HTTPException(404, { message: 'Task not found' });
   }
 
-  const now = new Date().toISOString();
+  const now = new Date();
   await db.update(tasks)
     .set({ deletedAt: now, updatedAt: now, version: existing[0].version + 1 })
     .where(eq(tasks.id, id));
@@ -194,7 +399,7 @@ app.delete('/api/tasks/:id', async (c) => {
   });
 
   return c.json({ success: true, data: { id, deleted: true } });
-});
+}
 
 app.get('/api/time-entries', zValidator('query', paginatedQuerySchema.extend({
   taskId: z.string().uuid().optional(),
@@ -256,7 +461,7 @@ app.post('/api/time-entries', zValidator('json', createTimeEntryInputSchema), as
   });
 
   return c.json({ success: true, data: newEntry }, 201);
-});
+}
 
 app.patch('/api/time-entries/:id', zValidator('json', updateTimeEntryInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -278,7 +483,7 @@ app.patch('/api/time-entries/:id', zValidator('json', updateTimeEntryInputSchema
     .returning();
 
   return c.json({ success: true, data: updated });
-});
+}
 
 app.get('/api/projects', zValidator('query', paginatedQuerySchema), async (c) => {
   const userId = c.get('userId');
@@ -305,7 +510,7 @@ app.get('/api/projects', zValidator('query', paginatedQuerySchema), async (c) =>
       hasMore: offset + items.length < totalResult[0].count,
     },
   });
-});
+}
 
 app.post('/api/projects', zValidator('json', createProjectInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -317,7 +522,7 @@ app.post('/api/projects', zValidator('json', createProjectInputSchema), async (c
   }).returning();
 
   return c.json({ success: true, data: newProject }, 201);
-});
+}
 
 app.patch('/api/projects/:id', zValidator('json', updateProjectInputSchema), async (c) => {
   const userId = c.get('userId');
@@ -338,7 +543,7 @@ app.patch('/api/projects/:id', zValidator('json', updateProjectInputSchema), asy
     .returning();
 
   return c.json({ success: true, data: updated });
-});
+}
 
 app.delete('/api/projects/:id', async (c) => {
   const userId = c.get('userId');
@@ -357,7 +562,7 @@ app.delete('/api/projects/:id', async (c) => {
     .where(eq(projects.id, id));
 
   return c.json({ success: true, data: { id, archived: true } });
-});
+}
 
 app.get('/api/websocket', async (c) => {
   const upgradeHeader = c.req.header('Upgrade');
@@ -365,13 +570,11 @@ app.get('/api/websocket', async (c) => {
     return c.text('Expected Upgrade: websocket', 426);
   }
 
-  const id = c.env.WEBSOCKET_SERVER.idFromName('main');
-  const stub = c.env.WEBSOCKET_SERVER.get(id);
-  return stub.fetch(c.req.raw);
+  return c.text('WebSocket endpoint - use WebSocket client', 501);
+}
+
+const port = parseInt(process.env.PORT || '8787');
+const server = createHttpServer(app.fetch);
+server.listen(port, () => {
+  console.log(`API server running on http://localhost:${port}`);
 });
-
-import { WebSocketServer } from './durable-objects/WebSocketServer';
-
-export { WebSocketServer };
-
-export default app;
