@@ -1,0 +1,33 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "pipeline": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "build/**", ".next/**", "!.next/cache/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "outputs": []
+    },
+    "typecheck": {
+      "outputs": []
+    },
+    "test": {
+      "outputs": ["coverage/**"],
+      "dependsOn": []
+    },
+    "db:generate": {
+      "outputs": ["packages/db-schema/src/generated/**"]
+    },
+    "db:migrate": {
+      "dependsOn": ["db:generate"]
+    },
+    "db:studio": {
+      "cache": false
+    }
+  },
+  "globalEnv": ["DATABASE_URL", "DATABASE_URL_UNPOOLED", "NEON_API_KEY"]
+}

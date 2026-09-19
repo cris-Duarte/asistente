@@ -1,0 +1,57 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Build outputs
+dist
+build
+.next
+.turbo
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.production.local
+.env.development.local
+.env.*.local
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Testing
+coverage
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Turbo
+.turbo
+
+# Wrangler
+.wrangler
+
+# Firmware
+apps/firmware/build
+apps/firmware/managed_components
+apps/firmware/dependencies.lock
+
+# Misc
+*.pem
+.vercel
+.netlify
