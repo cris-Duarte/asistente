@@ -1,536 +1,277 @@
-/**
- * Productivity Assistant - LVGL UI Implementation
- * Main screen for M5Stack Tab5 (1280x720)
- */
+#include "ui/ui_main.h"
 
-#include "ui_main.h"
+#include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+#include "bsp/m5stack_tab5.h"
+#include "lvgl.h"
 
-// UI Objects
-static lv_obj_t *main_screen = NULL;
-static lv_obj_t *sync_status_label = NULL;
-static lv_obj_t *battery_label = NULL;
-static lv_obj_t *wifi_label = NULL;
+static ui_callbacks_t s_callbacks;
+static stored_task_t s_tasks[STORAGE_MAX_TASKS];
+static int s_task_count;
+static int s_selected = -1;
+static bool s_timer_running;
+static char s_timer_task_id[37];
 
-static lv_obj_t *active_task_container = NULL;
-static lv_obj_t *active_task_title = NULL;
-static lv_obj_t *active_task_project = NULL;
-static lv_obj_t *timer_label = NULL;
-static lv_obj_t *progress_arc = NULL;
-static lv_obj_t *progress_label = NULL;
-static lv_obj_t *btn_pause = NULL;
-static lv_obj_t *btn_stop = NULL;
-static lv_obj_t *btn_done = NULL;
+static lv_obj_t *s_list;
+static lv_obj_t *s_title;
+static lv_obj_t *s_description;
+static lv_obj_t *s_timer;
+static lv_obj_t *s_timer_button_label;
+static lv_obj_t *s_sync;
+static lv_obj_t *s_device_status;
+static lv_obj_t *s_wifi;
+static lv_obj_t *s_pairing;
+static lv_obj_t *s_pairing_code;
+static lv_obj_t *s_wifi_modal;
+static lv_obj_t *s_wifi_dropdown;
+static lv_obj_t *s_wifi_password;
 
-static lv_obj_t *task_list_container = NULL;
-static lv_obj_t *task_list = NULL;
-
-static lv_obj_t *notification_container = NULL;
-
-// Colors
-static const lv_color_t COLOR_PRIMARY = LV_COLOR_MAKE(0x3B, 0x82, 0xF6);
-static const lv_color_t COLOR_SUCCESS = LV_COLOR_MAKE(0x10, 0xB9, 0x81);
-static const lv_color_t COLOR_WARNING = LV_COLOR_MAKE(0xF5, 0x9E, 0x0B);
-static const lv_color_t COLOR_ERROR = LV_COLOR_MAKE(0xEF, 0x44, 0x44);
-static const lv_color_t COLOR_BG = LV_COLOR_MAKE(0xF8, 0xFA, 0xFC);
-static const lv_color_t COLOR_CARD = LV_COLOR_WHITE;
-static const lv_color_t COLOR_TEXT = LV_COLOR_MAKE(0x1F, 0x29, 0x37);
-static const lv_color_t COLOR_TEXT_MUTED = LV_COLOR_MAKE(0x6B, 0x72, 0x80);
-
-// Styles
-static lv_style_t style_card;
-static lv_style_t style_btn_primary;
-static lv_style_t style_btn_secondary;
-static lv_style_t style_btn_danger;
-static lv_style_t style_text_title;
-static lv_style_t style_text_body;
-static lv_style_t style_text_muted;
-
-static void init_styles(void)
+static lv_obj_t *button(lv_obj_t *parent, const char *text, lv_event_cb_t callback)
 {
-    lv_style_init(&style_card);
-    lv_style_set_bg_color(&style_card, COLOR_CARD);
-    lv_style_set_border_color(&style_card, lv_color_make(0xE5, 0xE7, 0xEB));
-    lv_style_set_border_width(&style_card, 1);
-    lv_style_set_radius(&style_card, 12);
-    lv_style_set_pad_all(&style_card, 16);
-    lv_style_set_shadow_width(&style_card, 8);
-    lv_style_set_shadow_color(&style_card, lv_color_make(0x00, 0x00, 0x00));
-    lv_style_set_shadow_opa(&style_card, LV_OPA_10);
-
-    lv_style_init(&style_btn_primary);
-    lv_style_set_bg_color(&style_btn_primary, COLOR_PRIMARY);
-    lv_style_set_text_color(&style_btn_primary, LV_COLOR_WHITE);
-    lv_style_set_radius(&style_btn_primary, 8);
-    lv_style_set_pad_ver(&style_btn_primary, 12);
-    lv_style_set_pad_hor(&style_btn_primary, 24);
-    lv_style_set_text_font(&style_btn_primary, &lv_font_montserrat_14);
-
-    lv_style_init(&style_btn_secondary);
-    lv_style_set_bg_color(&style_btn_secondary, lv_color_make(0xF3, 0xF4, 0xF6));
-    lv_style_set_text_color(&style_btn_secondary, COLOR_TEXT);
-    lv_style_set_radius(&style_btn_secondary, 8);
-    lv_style_set_pad_ver(&style_btn_secondary, 12);
-    lv_style_init(&style_btn_secondary);
-    lv_style_set_bg_color(&style_btn_secondary, lv_color_make(0xF3, 0xF4, 0xF6));
-    lv_style_set_text_color(&style_btn_secondary, COLOR_TEXT);
-    lv_style_set_radius(&style_btn_secondary, 8);
-    lv_style_set_pad_ver(&style_btn_secondary, 12);
-    lv_style_set_pad_hor(&style_btn_secondary, 24);
-    lv_style_set_text_font(&style_btn_secondary, &lv_font_montserrat_14);
-
-    lv_style_init(&style_btn_danger);
-    lv_style_set_bg_color(&style_btn_danger, COLOR_ERROR);
-    lv_style_set_text_color(&style_btn_danger, LV_COLOR_WHITE);
-    lv_style_set_radius(&style_btn_danger, 8);
-    lv_style_set_pad_ver(&style_btn_danger, 12);
-    lv_style_set_pad_hor(&style_btn_danger, 24);
-    lv_style_set_text_font(&style_btn_danger, &lv_font_montserrat_14);
-
-    lv_style_init(&style_text_title);
-    lv_style_set_text_color(&style_text_title, COLOR_TEXT);
-    lv_style_set_text_font(&style_text_title, &lv_font_montserrat_20);
-
-    lv_style_init(&style_text_body);
-    lv_style_set_text_color(&style_text_body, COLOR_TEXT);
-    lv_style_set_text_font(&style_text_body, &lv_font_montserrat_14);
-
-    lv_style_init(&style_text_muted);
-    lv_style_set_text_color(&style_text_muted, COLOR_TEXT_MUTED);
-    lv_style_set_text_font(&style_text_muted, &lv_font_montserrat_12);
+    lv_obj_t *item = lv_button_create(parent);
+    lv_obj_set_height(item, 54);
+    lv_obj_add_event_cb(item, callback, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *label = lv_label_create(item);
+    lv_label_set_text(label, text);
+    lv_obj_center(label);
+    return item;
 }
 
-static void create_header(lv_obj_t *parent)
+static void update_detail(void)
 {
-    lv_obj_t *header = lv_obj_create(parent);
-    lv_obj_set_size(header, LV_PCT(100), 80);
-    lv_obj_set_style_bg_color(header, COLOR_CARD, 0);
-    lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_pad_all(header, 16);
-    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // Title
-    lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "Productivity");
-    lv_obj_add_style(title, &style_text_title, 0);
-
-    // Status indicators container
-    lv_obj_t *status_container = lv_obj_create(header);
-    lv_obj_set_style_bg_opa(status_container, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(status_container, 0, 0);
-    lv_obj_set_style_pad_all(status_container, 0);
-    lv_obj_set_flex_flow(status_container, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(status_container, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(status_container, 12, 0);
-
-    // Sync status
-    sync_status_label = lv_label_create(status_container);
-    lv_label_set_text(sync_status_label, LV_SYMBOL_WIFI " Offline");
-    lv_obj_add_style(sync_status_label, &style_text_muted, 0);
-
-    // WiFi
-    wifi_label = lv_label_create(status_container);
-    lv_label_set_text(wifi_label, LV_SYMBOL_WIFI " --");
-    lv_obj_add_style(wifi_label, &style_text_muted, 0);
-
-    // Battery
-    battery_label = lv_label_create(status_container);
-    lv_label_set_text(battery_label, LV_SYMBOL_BATTERY_FULL " 100%");
-    lv_obj_add_style(battery_label, &style_text_muted, 0);
-}
-
-static void create_active_task_section(lv_obj_t *parent)
-{
-    active_task_container = lv_obj_create(parent);
-    lv_obj_set_size(active_task_container, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_add_style(active_task_container, &style_card, 0);
-    lv_obj_set_style_pad_all(active_task_container, 20, 0);
-    lv_obj_set_flex_flow(active_task_container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(active_task_container, 16, 0);
-
-    // Header row
-    lv_obj_t *header_row = lv_obj_create(active_task_container);
-    lv_obj_set_size(header_row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(header_row, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(header_row, 0, 0);
-    lv_obj_set_style_pad_all(header_row, 0);
-    lv_obj_set_flex_flow(header_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    lv_obj_t *section_title = lv_label_create(header_row);
-    lv_label_set_text(section_title, "Tarea Activa");
-    lv_obj_add_style(section_title, &style_text_title, 0);
-
-    lv_obj_t *btn_view_all = lv_btn_create(header_row);
-    lv_obj_add_style(btn_view_all, &style_btn_secondary, 0);
-    lv_obj_t *btn_label = lv_label_create(btn_view_all);
-    lv_label_set_text(btn_label, "Ver todas");
-
-    // Task info
-    lv_obj_t *task_info = lv_obj_create(active_task_container);
-    lv_obj_set_size(task_info, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(task_info, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(task_info, 0, 0);
-    lv_obj_set_style_pad_all(task_info, 0);
-    lv_obj_set_flex_flow(task_info, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(task_info, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(task_info, 16, 0);
-
-    lv_obj_t *icon_container = lv_obj_create(task_info);
-    lv_obj_set_size(icon_container, 64, 64);
-    lv_obj_set_style_bg_color(icon_container, lv_color_make(0xDB, 0xE8, 0xFE), 0);
-    lv_obj_set_style_radius(icon_container, 12, 0);
-    lv_obj_set_style_pad_all(icon_container, 0);
-    lv_obj_t *icon = lv_label_create(icon_container);
-    lv_label_set_text(icon, LV_SYMBOL_TIMER);
-    lv_obj_set_style_text_color(icon, COLOR_PRIMARY, 0);
-    lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
-    lv_obj_center(icon);
-
-    lv_obj_t *text_container = lv_obj_create(task_info);
-    lv_obj_set_size(text_container, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(text_container, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(text_container, 0, 0);
-    lv_obj_set_style_pad_all(text_container, 0);
-    lv_obj_set_flex_flow(text_container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(text_container, 4, 0);
-
-    active_task_title = lv_label_create(text_container);
-    lv_label_set_text(active_task_title, "Sin tarea activa");
-    lv_obj_add_style(active_task_title, &style_text_title, 0);
-
-    active_task_project = lv_label_create(text_container);
-    lv_label_set_text(active_task_project, "Selecciona una tarea");
-    lv_obj_add_style(active_task_project, &style_text_muted, 0);
-
-    // Timer display
-    lv_obj_t *timer_container = lv_obj_create(active_task_container);
-    lv_obj_set_size(timer_container, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(timer_container, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(timer_container, 0, 0);
-    lv_obj_set_style_pad_all(timer_container, 0);
-    lv_obj_set_flex_flow(timer_container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(timer_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(timer_container, 8, 0);
-
-    timer_label = lv_label_create(timer_container);
-    lv_label_set_text(timer_label, "00:00:00");
-    lv_obj_set_style_text_font(timer_label, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(timer_label, COLOR_TEXT, 0);
-
-    progress_label = lv_label_create(timer_container);
-    lv_label_set_text(progress_label, "Selecciona una tarea");
-    lv_obj_add_style(progress_label, &style_text_muted, 0);
-
-    // Progress arc
-    progress_arc = lv_arc_create(timer_container);
-    lv_obj_set_size(progress_arc, 200, 200);
-    lv_arc_set_rotation(progress_arc, 270);
-    lv_arc_set_bg_angles(progress_arc, 0, 360);
-    lv_arc_set_value(progress_arc, 0);
-    lv_obj_set_style_arc_color(progress_arc, COLOR_PRIMARY, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_width(progress_arc, 8, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(progress_arc, lv_color_make(0xE5, 0xE7, 0xEB), LV_PART_MAIN);
-    lv_obj_set_style_arc_width(progress_arc, 8, LV_PART_MAIN);
-    lv_obj_remove_style(progress_arc, NULL, LV_PART_KNOB);
-    lv_obj_clear_flag(progress_arc, LV_OBJ_FLAG_CLICKABLE);
-
-    // Buttons row
-    lv_obj_t *btn_row = lv_obj_create(active_task_container);
-    lv_obj_set_size(btn_row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(btn_row, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(btn_row, 0, 0);
-    lv_obj_set_style_pad_all(btn_row, 0);
-    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btn_row, 12, 0);
-
-    btn_pause = lv_btn_create(btn_row);
-    lv_obj_add_style(btn_pause, &style_btn_secondary, 0);
-    lv_obj_t *pause_label = lv_label_create(btn_pause);
-    lv_label_set_text(pause_label, LV_SYMBOL_PAUSE " Pausar");
-
-    btn_stop = lv_btn_create(btn_row);
-    lv_obj_add_style(btn_stop, &style_btn_danger, 0);
-    lv_obj_t *stop_label = lv_label_create(btn_stop);
-    lv_label_set_text(stop_label, LV_SYMBOL_STOP " Detener");
-
-    btn_done = lv_btn_create(btn_row);
-    lv_obj_add_style(btn_done, &style_btn_primary, 0);
-    lv_obj_t *done_label = lv_label_create(btn_done);
-    lv_label_set_text(done_label, LV_SYMBOL_OK " Finalizar");
-
-    // Initially hide buttons
-    lv_obj_add_flag(btn_pause, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(btn_stop, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(btn_done, LV_OBJ_FLAG_HIDDEN);
-}
-
-static void create_task_list_section(lv_obj_t *parent)
-{
-    lv_obj_t *section_header = lv_obj_create(parent);
-    lv_obj_set_size(section_header, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(section_header, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(section_header, 0, 0);
-    lv_obj_set_style_pad_all(section_header, 0);
-    lv_obj_set_flex_flow(section_header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(section_header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_top(section_header, 24, 0);
-
-    lv_obj_t *title = lv_label_create(section_header);
-    lv_label_set_text(title, "Próximas Tareas");
-    lv_obj_add_style(title, &style_text_title, 0);
-
-    task_list_container = lv_obj_create(parent);
-    lv_obj_set_size(task_list_container, LV_PCT(100), 280);
-    lv_obj_add_style(task_list_container, &style_card, 0);
-    lv_obj_set_style_pad_all(task_list_container, 0, 0);
-
-    task_list = lv_list_create(task_list_container);
-    lv_obj_set_size(task_list, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(task_list, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(task_list, 0, 0);
-    lv_obj_set_style_pad_all(task_list, 8, 0);
-}
-
-static void create_notification_area(lv_obj_t *parent)
-{
-    notification_container = lv_obj_create(parent);
-    lv_obj_set_size(notification_container, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(notification_container, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(notification_container, 0, 0);
-    lv_obj_set_style_pad_all(notification_container, 0, 0);
-    lv_obj_set_flex_flow(notification_container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(notification_container, 8, 0);
-    lv_obj_add_flag(notification_container, LV_OBJ_FLAG_HIDDEN);
-}
-
-void ui_main_init(void)
-{
-    init_styles();
-
-    main_screen = lv_obj_create(NULL);
-    lv_obj_set_style_bg_color(main_screen, COLOR_BG, 0);
-    lv_obj_set_flex_flow(main_screen, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_all(main_screen, 0, 0);
-
-    // Create scrollable content
-    lv_obj_t *content = lv_obj_create(main_screen);
-    lv_obj_set_size(content, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(content, LV_OPA_0, 0);
-    lv_obj_set_style_border_width(content, 0, 0);
-    lv_obj_set_style_pad_all(content, 20, 0);
-    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(content, 20, 0);
-    lv_obj_set_scrollbar_mode(content, LV_SCROLLBAR_MODE_OFF);
-
-    create_header(content);
-    create_active_task_section(content);
-    create_task_list_section(content);
-    create_notification_area(content);
-
-    lv_scr_load(main_screen);
-}
-
-void ui_main_update_sync_status(sync_status_t status)
-{
-    if (!sync_status_label) return;
-
-    switch (status) {
-        case SYNC_STATUS_OFFLINE:
-            lv_label_set_text(sync_status_label, LV_SYMBOL_WIFI_OFF " Offline");
-            lv_obj_set_style_text_color(sync_status_label, COLOR_TEXT_MUTED, 0);
-            break;
-        case SYNC_STATUS_CONNECTING:
-            lv_label_set_text(sync_status_label, LV_SYMBOL_REFRESH " Conectando...");
-            lv_obj_set_style_text_color(sync_status_label, COLOR_WARNING, 0);
-            break;
-        case SYNC_STATUS_SYNCED:
-            lv_label_set_text(sync_status_label, LV_SYMBOL_OK " Sincronizado");
-            lv_obj_set_style_text_color(sync_status_label, COLOR_SUCCESS, 0);
-            break;
-        case SYNC_STATUS_ERROR:
-            lv_label_set_text(sync_status_label, LV_SYMBOL_CLOSE " Error");
-            lv_obj_set_style_text_color(sync_status_label, COLOR_ERROR, 0);
-            break;
-    }
-}
-
-void ui_main_update_active_task(const ui_task_t *task)
-{
-    if (!active_task_title || !active_task_project) return;
-
-    if (task) {
-        lv_label_set_text(active_task_title, task->title);
-        char project_text[64];
-        snprintf(project_text, sizeof(project_text), "Proyecto: %s", task->project);
-        lv_label_set_text(active_task_project, project_text);
-
-        // Show buttons
-        lv_obj_clear_flag(btn_pause, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(btn_stop, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(btn_done, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_label_set_text(active_task_title, "Sin tarea activa");
-        lv_label_set_text(active_task_project, "Selecciona una tarea");
-        
-        // Hide buttons
-        lv_obj_add_flag(btn_pause, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(btn_stop, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(btn_done, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-void ui_main_update_timer(int32_t seconds, float progress)
-{
-    if (!timer_label) return;
-
-    int32_t hours = seconds / 3600;
-    int32_t minutes = (seconds % 3600) / 60;
-    int32_t secs = seconds % 60;
-
-    char time_str[16];
-    if (hours > 0) {
-        snprintf(time_str, sizeof(time_str), "%02" PRId32 ":%02" PRId32 ":%02" PRId32, hours, minutes, secs);
-    } else {
-        snprintf(time_str, sizeof(time_str), "%02" PRId32 ":%02" PRId32, minutes, secs);
-    }
-    lv_label_set_text(timer_label, time_str);
-
-    if (progress_arc) {
-        lv_arc_set_value(progress_arc, (int16_t)progress);
-    }
-
-    if (progress_label) {
-        if (progress >= 100) {
-            lv_label_set_text(progress_label, "¡Tiempo estimado completado!");
-            lv_obj_set_style_text_color(progress_label, COLOR_SUCCESS, 0);
-        } else if (progress > 0) {
-            char progress_str[32];
-            snprintf(progress_str, sizeof(progress_str), "%.0f%% del tiempo estimado", progress);
-            lv_label_set_text(progress_label, progress_str);
-            lv_obj_set_style_text_color(progress_label, COLOR_TEXT_MUTED, 0);
-        } else {
-            lv_label_set_text(progress_label, "Selecciona una tarea");
-            lv_obj_set_style_text_color(progress_label, COLOR_TEXT_MUTED, 0);
-        }
-    }
-}
-
-void ui_main_update_task_list(const ui_task_t *tasks, int count)
-{
-    if (!task_list) return;
-
-    // Clear existing items
-    lv_obj_clean(task_list);
-
-    if (count == 0) {
-        lv_obj_t *empty_label = lv_label_create(task_list);
-        lv_label_set_text(empty_label, "No hay tareas pendientes");
-        lv_obj_add_style(empty_label, &style_text_muted, 0);
-        lv_obj_center(empty_label);
+    if (s_selected < 0 || s_selected >= s_task_count) {
+        lv_label_set_text(s_title, "Selecciona una tarea");
+        lv_label_set_text(s_description, "La lista se conserva sin conexión.");
         return;
     }
+    const stored_task_t *task = &s_tasks[s_selected];
+    lv_label_set_text(s_title, task->title);
+    char detail[420];
+    snprintf(detail, sizeof(detail), "%s\n\nEstado: %s  ·  Estimado: %" PRId32 " min  ·  Registrado: %" PRId32 " min",
+             task->description[0] ? task->description : "Sin descripción", task->status,
+             task->estimated_minutes, task->total_tracked_seconds / 60);
+    lv_label_set_text(s_description, detail);
+    lv_label_set_text(s_timer_button_label,
+                      s_timer_running && strcmp(s_timer_task_id, task->id) == 0 ? "Pausar" : "Iniciar");
+}
 
-    for (int i = 0; i < count; i++) {
-        const ui_task_t *task = &tasks[i];
-        
-        lv_obj_t *item = lv_list_add_btn(task_list, LV_SYMBOL_RIGHT, task->title);
-        lv_obj_set_style_pad_ver(item, 16, 0);
-        lv_obj_set_style_pad_hor(item, 16, 0);
-        
-        // Add project label
-        lv_obj_t *project_label = lv_label_create(item);
-        lv_label_set_text_fmt(project_label, "%s · %s", task->project, 
-            task->estimated_seconds > 0 ? "Estimado" : "Sin estimación");
-        lv_obj_add_style(project_label, &style_text_muted, 0);
-        lv_obj_align(project_label, LV_ALIGN_RIGHT_MID, -16, 0);
+static void task_clicked(lv_event_t *event)
+{
+    s_selected = (int)(intptr_t)lv_event_get_user_data(event);
+    update_detail();
+}
+
+static void done_clicked(lv_event_t *event)
+{
+    (void)event;
+    if (s_selected >= 0 && s_callbacks.set_task_status) {
+        s_callbacks.set_task_status(&s_tasks[s_selected], "done");
     }
 }
 
-void ui_main_toggle_timer(void)
+static void timer_clicked(lv_event_t *event)
 {
-    // This will be handled by the main app logic
-    // Just a placeholder for the button callback
+    (void)event;
+    if (s_selected >= 0 && s_callbacks.toggle_timer) s_callbacks.toggle_timer(&s_tasks[s_selected]);
 }
 
-void ui_main_show_task_menu(void)
+static void wifi_close(lv_event_t *event)
 {
-    // Placeholder for context menu
+    (void)event;
+    if (s_wifi_modal) lv_obj_add_flag(s_wifi_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
-void ui_main_switch_task(void)
+static void wifi_connect(lv_event_t *event)
 {
-    // Placeholder for quick task switch
+    (void)event;
+    if (!s_callbacks.connect_wifi) return;
+    char ssid[33] = {0};
+    lv_dropdown_get_selected_str(s_wifi_dropdown, ssid, sizeof(ssid));
+    s_callbacks.connect_wifi(ssid, lv_textarea_get_text(s_wifi_password));
+    lv_obj_add_flag(s_wifi_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
-void ui_main_set_battery_level(uint8_t level)
+static void wifi_open(lv_event_t *event)
 {
-    if (!battery_label) return;
-    
-    const char *icon;
-    if (level >= 80) icon = LV_SYMBOL_BATTERY_FULL;
-    else if (level >= 60) icon = LV_SYMBOL_BATTERY_3;
-    else if (level >= 40) icon = LV_SYMBOL_BATTERY_2;
-    else if (level >= 20) icon = LV_SYMBOL_BATTERY_1;
-    else icon = LV_SYMBOL_BATTERY_EMPTY;
-
-    char text[32];
-    snprintf(text, sizeof(text), "%s %d%%", icon, level);
-    lv_label_set_text(battery_label, text);
-}
-
-void ui_main_set_wifi_strength(uint8_t strength)
-{
-    if (!wifi_label) return;
-
-    const char *icon;
-    switch (strength) {
-        case 4: icon = LV_SYMBOL_WIFI; break;
-        case 3: icon = LV_SYMBOL_WIFI; break;
-        case 2: icon = LV_SYMBOL_WIFI; break;
-        case 1: icon = LV_SYMBOL_WIFI; break;
-        default: icon = LV_SYMBOL_WIFI_OFF; break;
+    (void)event;
+    if (!s_wifi_modal) return;
+    char ssids[12][33] = {{0}};
+    int rssi[12] = {0};
+    int count = s_callbacks.scan_wifi ? s_callbacks.scan_wifi(ssids, rssi, 12) : 0;
+    char options[512] = {0};
+    for (int index = 0; index < count; ++index) {
+        if (index) strlcat(options, "\n", sizeof(options));
+        strlcat(options, ssids[index], sizeof(options));
     }
-
-    char text[32];
-    snprintf(text, sizeof(text), "%s %d", icon, strength * 25);
-    lv_label_set_text(wifi_label, text);
+    lv_dropdown_set_options(s_wifi_dropdown, count ? options : "No se encontraron redes");
+    lv_obj_remove_flag(s_wifi_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
-void ui_main_show_notification(const char *title, const char *message)
+static void textarea_focus(lv_event_t *event)
 {
-    if (!notification_container) return;
-
-    lv_obj_clear_flag(notification_container, LV_OBJ_FLAG_HIDDEN);
-
-    lv_obj_t *notif = lv_obj_create(notification_container);
-    lv_obj_set_size(notif, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(notif, COLOR_PRIMARY, 0);
-    lv_obj_set_style_radius(notif, 8, 0);
-    lv_obj_set_style_pad_all(notif, 16, 0);
-    lv_obj_set_flex_flow(notif, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(notif, 4, 0);
-
-    lv_obj_t *title_label = lv_label_create(notif);
-    lv_label_set_text(title_label, title);
-    lv_obj_set_style_text_color(title_label, LV_COLOR_WHITE, 0);
-    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, 0);
-
-    lv_obj_t *msg_label = lv_label_create(notif);
-    lv_label_set_text(msg_label, message);
-    lv_obj_set_style_text_color(msg_label, lv_color_make(0xDB, 0xE8, 0xFE), 0);
-    lv_obj_set_style_text_font(msg_label, &lv_font_montserrat_12, 0);
-
-    // Auto-hide after 5 seconds
-    lv_timer_t *timer = lv_timer_create((lv_timer_cb_t)lv_obj_add_flag, 5000, notif);
-    lv_timer_set_repeat_count(timer, 1);
+    lv_obj_t *textarea = lv_event_get_target_obj(event);
+    lv_obj_t *keyboard = lv_keyboard_create(s_wifi_modal);
+    lv_obj_set_size(keyboard, LV_PCT(100), 270);
+    lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(keyboard, textarea);
+    lv_obj_add_event_cb(keyboard, wifi_close, LV_EVENT_CANCEL, NULL);
 }
 
-const char* ui_main_get_active_task_id(void)
+void ui_main_init(const ui_callbacks_t *callbacks)
 {
-    // Would need to track this in the UI state
-    return NULL;
+    s_callbacks = *callbacks;
+    lv_obj_t *screen = lv_screen_active();
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0xF4F6FA), 0);
+    lv_obj_set_style_pad_all(screen, 18, 0);
+
+    lv_obj_t *header = lv_obj_create(screen);
+    lv_obj_set_size(header, LV_PCT(100), 68);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *brand = lv_label_create(header);
+    lv_label_set_text(brand, "Productividad");
+    lv_obj_set_style_text_font(brand, &lv_font_montserrat_28, 0);
+    s_device_status = lv_label_create(header);
+    lv_label_set_text(s_device_status, "--:-- UTC · Bat --");
+    s_sync = lv_label_create(header);
+    lv_label_set_text(s_sync, "Sin conexión");
+    s_wifi = lv_label_create(header);
+    lv_label_set_text(s_wifi, LV_SYMBOL_WIFI " Configurar");
+    lv_obj_add_flag(s_wifi, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_wifi, wifi_open, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *body = lv_obj_create(screen);
+    lv_obj_set_size(body, LV_PCT(100), 600);
+    lv_obj_align(body, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(body, 18, 0);
+
+    s_list = lv_list_create(body);
+    lv_obj_set_size(s_list, 430, LV_PCT(100));
+
+    lv_obj_t *detail = lv_obj_create(body);
+    lv_obj_set_flex_grow(detail, 1);
+    lv_obj_set_height(detail, LV_PCT(100));
+    lv_obj_set_flex_flow(detail, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(detail, 18, 0);
+    s_title = lv_label_create(detail);
+    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_28, 0);
+    lv_label_set_text(s_title, "Selecciona una tarea");
+    s_description = lv_label_create(detail);
+    lv_obj_set_width(s_description, LV_PCT(100));
+    lv_label_set_long_mode(s_description, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_description, "La lista se conserva sin conexión.");
+    s_timer = lv_label_create(detail);
+    lv_obj_set_style_text_font(s_timer, &lv_font_montserrat_48, 0);
+    lv_label_set_text(s_timer, "00:00:00");
+
+    lv_obj_t *actions = lv_obj_create(detail);
+    lv_obj_set_size(actions, LV_PCT(100), 80);
+    lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
+    lv_obj_t *timer_button = button(actions, "Iniciar", timer_clicked);
+    s_timer_button_label = lv_obj_get_child(timer_button, 0);
+    button(actions, "Completar", done_clicked);
+
+    s_pairing = lv_obj_create(detail);
+    lv_obj_set_width(s_pairing, LV_PCT(100));
+    lv_obj_add_flag(s_pairing, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *pairing_text = lv_label_create(s_pairing);
+    lv_label_set_text(pairing_text, "Vincula esta Tab5 en Ajustes con el código:");
+    s_pairing_code = lv_label_create(s_pairing);
+    lv_obj_set_style_text_font(s_pairing_code, &lv_font_montserrat_28, 0);
+    lv_obj_align(s_pairing_code, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    s_wifi_modal = lv_obj_create(screen);
+    lv_obj_set_size(s_wifi_modal, 760, 600);
+    lv_obj_center(s_wifi_modal);
+    lv_obj_set_flex_flow(s_wifi_modal, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_wifi_modal, 14, 0);
+    lv_obj_add_flag(s_wifi_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t *wifi_title = lv_label_create(s_wifi_modal);
+    lv_label_set_text(wifi_title, "Conectar Wi-Fi");
+    lv_obj_set_style_text_font(wifi_title, &lv_font_montserrat_28, 0);
+    s_wifi_dropdown = lv_dropdown_create(s_wifi_modal);
+    lv_obj_set_width(s_wifi_dropdown, LV_PCT(100));
+    s_wifi_password = lv_textarea_create(s_wifi_modal);
+    lv_textarea_set_placeholder_text(s_wifi_password, "Contraseña");
+    lv_textarea_set_password_mode(s_wifi_password, true);
+    lv_obj_set_width(s_wifi_password, LV_PCT(100));
+    lv_obj_add_event_cb(s_wifi_password, textarea_focus, LV_EVENT_FOCUSED, NULL);
+    lv_obj_t *wifi_actions = lv_obj_create(s_wifi_modal);
+    lv_obj_set_size(wifi_actions, LV_PCT(100), 75);
+    lv_obj_set_flex_flow(wifi_actions, LV_FLEX_FLOW_ROW);
+    button(wifi_actions, "Conectar", wifi_connect);
+    button(wifi_actions, "Cerrar", wifi_close);
+}
+
+void ui_main_set_tasks(const stored_task_t *tasks, int count)
+{
+    if (!bsp_display_lock(1000)) return;
+    s_task_count = count > STORAGE_MAX_TASKS ? STORAGE_MAX_TASKS : count;
+    memcpy(s_tasks, tasks, sizeof(stored_task_t) * (size_t)s_task_count);
+    lv_obj_clean(s_list);
+    for (int index = 0; index < s_task_count; ++index) {
+        char text[210];
+        snprintf(text, sizeof(text), "%s  ·  %s", s_tasks[index].title, s_tasks[index].status);
+        lv_obj_t *item = lv_list_add_button(s_list, strcmp(s_tasks[index].status, "done") == 0 ? LV_SYMBOL_OK : LV_SYMBOL_RIGHT, text);
+        lv_obj_add_event_cb(item, task_clicked, LV_EVENT_CLICKED, (void *)(intptr_t)index);
+    }
+    if (s_selected >= s_task_count) s_selected = -1;
+    update_detail();
+    bsp_display_unlock();
+}
+
+void ui_main_set_timer(const stored_time_entry_t *entry, uint32_t elapsed_seconds, bool running)
+{
+    if (!bsp_display_lock(1000)) return;
+    s_timer_running = running;
+    strlcpy(s_timer_task_id, entry ? entry->task_id : "", sizeof(s_timer_task_id));
+    char text[16];
+    snprintf(text, sizeof(text), "%02" PRIu32 ":%02" PRIu32 ":%02" PRIu32,
+             elapsed_seconds / 3600, (elapsed_seconds / 60) % 60, elapsed_seconds % 60);
+    lv_label_set_text(s_timer, text);
+    update_detail();
+    bsp_display_unlock();
+}
+
+void ui_main_set_sync(const char *message, int pending)
+{
+    if (!bsp_display_lock(1000)) return;
+    char text[128];
+    snprintf(text, sizeof(text), "%s%s%d", message, pending ? " · pendientes: " : "", pending);
+    lv_label_set_text(s_sync, text);
+    bsp_display_unlock();
+}
+
+void ui_main_set_device_status(const char *clock_text, float battery_voltage)
+{
+    if (!bsp_display_lock(1000)) return;
+    char text[64];
+    if (battery_voltage > 0.0f) {
+        snprintf(text, sizeof(text), "%s · Bat %.2f V", clock_text, (double)battery_voltage);
+    } else {
+        snprintf(text, sizeof(text), "%s · Bat --", clock_text);
+    }
+    lv_label_set_text(s_device_status, text);
+    bsp_display_unlock();
+}
+
+void ui_main_set_pairing_code(const char *code)
+{
+    if (!bsp_display_lock(1000)) return;
+    lv_label_set_text(s_pairing_code, code ? code : "");
+    if (code && code[0]) lv_obj_remove_flag(s_pairing, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_pairing, LV_OBJ_FLAG_HIDDEN);
+    bsp_display_unlock();
+}
+
+void ui_main_set_wifi(bool connected, const char *message)
+{
+    if (!bsp_display_lock(1000)) return;
+    char text[96];
+    snprintf(text, sizeof(text), LV_SYMBOL_WIFI " %s", message ? message : (connected ? "Conectado" : "Sin conexión"));
+    lv_label_set_text(s_wifi, text);
+    bsp_display_unlock();
 }

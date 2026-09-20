@@ -1,209 +1,249 @@
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { HTTPException } from 'hono/http-exception';
-import { createUser, getUserByEmail, getUserById } from '../auth/passkeys';
-import { createAccessToken, createRefreshToken, verifyRefreshToken, rotateRefreshToken } from '../auth/jwt';
+import { and, count, eq, gt, isNull, ne } from 'drizzle-orm';
 import {
-  generateRegistrationOptionsForUser,
-  verifyRegistration,
-  generateAuthenticationOptionsForUser,
+  db,
+  passkeyCredentials,
+  recoveryCodes,
+  sessions,
+  setupTokens,
+  users,
+} from '@productivity-assistant/db-schema';
+import {
+  authenticationOptions,
+  registrationOptions,
+  saveRegistration,
   verifyAuthentication,
 } from '../auth/passkeys';
-import { setCookie, deleteCookie, getCookie } from 'hono/cookie';
+import {
+  clearSessionCookie,
+  consumeChallenge,
+  createSession,
+  generateRecoveryCodes,
+  hashSecret,
+  normalizeRecoveryCode,
+  randomToken,
+  rateLimit,
+  storeChallenge,
+  type AuthVariables,
+} from '../auth/security';
+import { parseJson } from '../validation';
 
-const auth = new Hono();
+const auth = new Hono<{ Variables: AuthVariables }>();
+const responseSchema = z.object({ response: z.any(), ceremonyId: z.string().min(20), name: z.string().min(1).max(80).optional() });
 
-// Rate limiting store (in production use KV/Durable Object)
-const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
-
-function rateLimit(limit: number, windowMs: number) {
-  return async (c: any, next: any) => {
-    const ip = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || 'unknown';
-    const key = `ratelimit:${ip}:${c.req.path}`;
-    const now = Date.now();
-
-    const record = rateLimitStore.get(key);
-    if (record && record.resetAt > now) {
-      if (record.count >= limit) {
-        throw new HTTPException(429, { message: 'Too many requests' });
-      }
-      record.count++;
-    } else {
-      rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
-    }
-
-    await next();
+function publicUser(user: typeof users.$inferSelect) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    timezone: user.timezone,
+    preferences: user.preferences,
   };
 }
 
-// Register new user (or get existing)
-auth.post('/register', rateLimit(5, 60000), zValidator('json', z.object({
-  email: z.string().email(),
-})), async (c) => {
-  const { email } = c.req.valid('json');
-  const user = await createUser(email);
-  return c.json({ success: true, data: { id: user.id, email: user.email } });
-});
-
-// Start passkey registration
-auth.post('/passkey/registration/start', rateLimit(10, 60000), zValidator('json', z.object({
-  userId: z.string().uuid(),
-})), async (c) => {
-  const { userId } = c.req.valid('json');
-  const options = await generateRegistrationOptionsForUser(userId);
-
-  // Store challenge in cookie (httpOnly, secure)
-  setCookie(c, 'passkey_challenge', options.challenge, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Strict',
-    maxAge: 300, // 5 minutes
-    path: '/',
+async function replaceRecoveryCodes(userId: string): Promise<string[]> {
+  const codes = generateRecoveryCodes();
+  await db.transaction(async (tx) => {
+    await tx.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId));
+    await tx.insert(recoveryCodes).values(codes.map((code) => ({
+      userId,
+      codeHash: hashSecret(normalizeRecoveryCode(code)),
+    })));
   });
+  return codes;
+}
 
-  return c.json({ success: true, data: options });
-});
-
-// Complete passkey registration
-auth.post('/passkey/registration/finish', rateLimit(10, 60000), zValidator('json', z.object({
-  userId: z.string().uuid(),
-  response: z.any(),
-})), async (c) => {
-  const { userId, response } = c.req.valid('json');
-  const challenge = getCookie(c, 'passkey_challenge');
-
-  if (!challenge) {
-    throw new HTTPException(400, { message: 'Challenge expired or missing' });
-  }
-
-  await verifyRegistration(userId, response, challenge);
-  deleteCookie(c, 'passkey_challenge', { path: '/' });
-
-  const { accessToken, refreshToken } = await createTokens(userId, c.req.header('X-Device-ID') || 'web');
-
-  setCookie(c, 'refresh_token', refreshToken, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Strict',
-    maxAge: 60 * 60 * 24 * 7, // 7 days
-    path: '/',
-  });
-
-  return c.json({ success: true, data: { accessToken } });
-});
-
-// Start passkey authentication
-auth.post('/passkey/authentication/start', rateLimit(10, 60000), zValidator('json', z.object({
-  userId: z.string().uuid(),
-})), async (c) => {
-  const { userId } = c.req.valid('json');
-  const options = await generateAuthenticationOptionsForUser(userId);
-
-  setCookie(c, 'passkey_challenge', options.challenge, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Strict',
-    maxAge: 300,
-    path: '/',
-  });
-
-  return c.json({ success: true, data: options });
-});
-
-// Complete passkey authentication
-auth.post('/passkey/authentication/finish', rateLimit(10, 60000), zValidator('json', z.object({
-  userId: z.string().uuid(),
-  response: z.any(),
-})), async (c) => {
-  const { userId, response } = c.req.valid('json');
-  const challenge = getCookie(c, 'passkey_challenge');
-
-  if (!challenge) {
-    throw new HTTPException(400, { message: 'Challenge expired or missing' });
-  }
-
-  await verifyAuthentication(userId, response, challenge);
-  deleteCookie(c, 'passkey_challenge', { path: '/' });
-
-  const { accessToken, refreshToken } = await createTokens(userId, c.req.header('X-Device-ID') || 'web');
-
-  setCookie(c, 'refresh_token', refreshToken, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Strict',
-    maxAge: 60 * 60 * 24 * 7,
-    path: '/',
-  });
-
-  return c.json({ success: true, data: { accessToken } });
-});
-
-// Refresh access token
-auth.post('/refresh', async (c) => {
-  const refreshToken = getCookie(c, 'refresh_token');
-
-  if (!refreshToken) {
-    throw new HTTPException(401, { message: 'No refresh token' });
-  }
-
-  const tokens = await rotateRefreshToken(refreshToken);
-  if (!tokens) {
-    deleteCookie(c, 'refresh_token', { path: '/' });
-    throw new HTTPException(401, { message: 'Invalid refresh token' });
-  }
-
-  setCookie(c, 'refresh_token', tokens.refreshToken, {
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Strict',
-    maxAge: 60 * 60 * 24 * 7,
-    path: '/',
-  });
-
-  return c.json({ success: true, data: { accessToken: tokens.accessToken } });
-});
-
-// Logout
-auth.post('/logout', async (c) => {
-  deleteCookie(c, 'refresh_token', { path: '/' });
-  return c.json({ success: true, data: { message: 'Logged out' } });
-});
-
-// Get current user
-auth.get('/me', async (c) => {
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    throw new HTTPException(401, { message: 'Unauthorized' });
-  }
-
-  const token = authHeader.slice(7);
-  const { verifyToken } = await import('../auth/jwt');
-  const payload = await verifyToken(token);
-
-  if (!payload) {
-    throw new HTTPException(401, { message: 'Invalid token' });
-  }
-
-  const user = await getUserById(payload.userId);
-  if (!user) {
-    throw new HTTPException(404, { message: 'User not found' });
-  }
-
+auth.get('/setup/status', async (c) => {
+  const [ownerRows, credentialCount] = await Promise.all([
+    db.select().from(users).limit(1),
+    db.select({ count: count() }).from(passkeyCredentials),
+  ]);
   return c.json({
     success: true,
     data: {
-      id: user.id,
-      email: user.email,
-      hasPasskey: !!user.passkeyCredentialId,
+      ownerInitialized: ownerRows.length === 1,
+      setupRequired: ownerRows.length === 1 && Number(credentialCount[0]?.count ?? 0) === 0,
     },
   });
 });
 
-async function createTokens(userId: string, deviceId: string) {
-  const accessToken = await createAccessToken(userId, deviceId);
-  const refreshToken = await createRefreshToken(userId, deviceId);
-  return { accessToken, refreshToken };
-}
+auth.post('/setup/passkey/options', rateLimit(8, 60), async (c) => {
+  const { token } = await parseJson(c, z.object({ token: z.string().min(32) }));
+  const rows = await db.select().from(setupTokens).where(and(
+    eq(setupTokens.tokenHash, hashSecret(token)),
+    isNull(setupTokens.usedAt),
+    gt(setupTokens.expiresAt, new Date()),
+  )).limit(1);
+  const setup = rows[0];
+  if (!setup) throw new HTTPException(401, { message: 'El enlace de configuración es inválido o expiró.' });
+  const existing = await db.select({ count: count() }).from(passkeyCredentials).where(eq(passkeyCredentials.userId, setup.userId));
+  if (Number(existing[0]?.count ?? 0) > 0) throw new HTTPException(409, { message: 'La configuración inicial ya fue completada.' });
+  const options = await registrationOptions(setup.userId);
+  const ceremonyId = randomToken();
+  await storeChallenge(ceremonyId, { purpose: 'setup', userId: setup.userId, challenge: options.challenge, tokenHash: setup.tokenHash });
+  return c.json({ success: true, data: { options, ceremonyId } });
+});
+
+auth.post('/setup/passkey/verify', rateLimit(8, 60), async (c) => {
+  const { token, response, ceremonyId, name } = await parseJson(c, responseSchema.extend({ token: z.string().min(32) }));
+  const challenge = await consumeChallenge<{ purpose: string; userId: string; challenge: string; tokenHash: string }>(ceremonyId);
+  if (!challenge || challenge.purpose !== 'setup' || challenge.tokenHash !== hashSecret(token)) {
+    throw new HTTPException(400, { message: 'La ceremonia expiró. Iníciala nuevamente.' });
+  }
+  const setupRows = await db.select().from(setupTokens).where(and(
+    eq(setupTokens.tokenHash, challenge.tokenHash),
+    isNull(setupTokens.usedAt),
+    gt(setupTokens.expiresAt, new Date()),
+  )).limit(1);
+  if (!setupRows[0]) throw new HTTPException(401, { message: 'El enlace de configuración expiró.' });
+  await saveRegistration(challenge.userId, response, challenge.challenge, name ?? 'Passkey principal');
+  await db.update(setupTokens).set({ usedAt: new Date() }).where(eq(setupTokens.userId, challenge.userId));
+  const codes = await replaceRecoveryCodes(challenge.userId);
+  await createSession(c, challenge.userId);
+  const [owner] = await db.select().from(users).where(eq(users.id, challenge.userId)).limit(1);
+  return c.json({ success: true, data: { user: publicUser(owner), recoveryCodes: codes } });
+});
+
+auth.post('/passkey/options', rateLimit(12, 60), async (c) => {
+  const registered = await db.select({ count: count() }).from(passkeyCredentials);
+  if (Number(registered[0]?.count ?? 0) === 0) throw new HTTPException(409, { message: 'La cuenta todavía no tiene una passkey.' });
+  const options = await authenticationOptions();
+  const ceremonyId = randomToken();
+  await storeChallenge(ceremonyId, { purpose: 'login', challenge: options.challenge });
+  return c.json({ success: true, data: { options, ceremonyId } });
+});
+
+auth.post('/passkey/verify', rateLimit(12, 60), async (c) => {
+  const { response, ceremonyId } = await parseJson(c, responseSchema);
+  const challenge = await consumeChallenge<{ purpose: string; challenge: string }>(ceremonyId);
+  if (!challenge || challenge.purpose !== 'login') throw new HTTPException(400, { message: 'La ceremonia expiró.' });
+  const credential = await verifyAuthentication(response, challenge.challenge);
+  await createSession(c, credential.userId);
+  const [owner] = await db.select().from(users).where(eq(users.id, credential.userId)).limit(1);
+  return c.json({ success: true, data: { user: publicUser(owner) } });
+});
+
+auth.post('/recovery', rateLimit(5, 15 * 60), async (c) => {
+  const { code } = await parseJson(c, z.object({ code: z.string().min(16) }));
+  const rows = await db.select().from(recoveryCodes).where(and(
+    eq(recoveryCodes.codeHash, hashSecret(normalizeRecoveryCode(code))),
+    isNull(recoveryCodes.usedAt),
+  )).limit(1);
+  const recovery = rows[0];
+  if (!recovery) throw new HTTPException(401, { message: 'Código inválido o utilizado.' });
+  await db.update(recoveryCodes).set({ usedAt: new Date() }).where(and(eq(recoveryCodes.id, recovery.id), isNull(recoveryCodes.usedAt)));
+  await createSession(c, recovery.userId, { recoveryRequired: true, shortLived: true });
+  return c.json({ success: true, data: { recoveryRequired: true } });
+});
+
+auth.get('/me', async (c) => {
+  const [owner, credentialCount] = await Promise.all([
+    db.select().from(users).where(eq(users.id, c.get('userId'))).limit(1),
+    db.select({ count: count() }).from(passkeyCredentials).where(eq(passkeyCredentials.userId, c.get('userId'))),
+  ]);
+  if (!owner[0]) throw new HTTPException(404, { message: 'Propietario no encontrado.' });
+  return c.json({ success: true, data: { ...publicUser(owner[0]), passkeyCount: Number(credentialCount[0]?.count ?? 0), recoveryRequired: c.get('recoveryRequired') ?? false } });
+});
+
+auth.patch('/me', async (c) => {
+  const input = await parseJson(c, z.object({
+  name: z.string().min(1).max(120).optional(),
+  timezone: z.string().min(1).max(80).optional(),
+  preferences: z.record(z.unknown()).optional(),
+  }));
+  const [owner] = await db.update(users).set({ ...input, updatedAt: new Date() }).where(eq(users.id, c.get('userId'))).returning();
+  return c.json({ success: true, data: publicUser(owner) });
+});
+
+auth.post('/logout', async (c) => {
+  const sessionId = c.get('sessionId');
+  if (sessionId) await db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.id, sessionId));
+  clearSessionCookie(c);
+  return c.json({ success: true, data: { loggedOut: true } });
+});
+
+auth.get('/passkeys', async (c) => {
+  const items = await db.select({
+    id: passkeyCredentials.id,
+    name: passkeyCredentials.name,
+    transports: passkeyCredentials.transports,
+    deviceType: passkeyCredentials.deviceType,
+    backedUp: passkeyCredentials.backedUp,
+    createdAt: passkeyCredentials.createdAt,
+    lastUsedAt: passkeyCredentials.lastUsedAt,
+  }).from(passkeyCredentials).where(eq(passkeyCredentials.userId, c.get('userId')));
+  return c.json({ success: true, data: items });
+});
+
+auth.post('/passkeys/options', async (c) => {
+  const options = await registrationOptions(c.get('userId'));
+  const ceremonyId = randomToken();
+  await storeChallenge(ceremonyId, { purpose: 'add-passkey', userId: c.get('userId'), challenge: options.challenge });
+  return c.json({ success: true, data: { options, ceremonyId } });
+});
+
+auth.post('/passkeys/verify', async (c) => {
+  const { response, ceremonyId, name } = await parseJson(c, responseSchema);
+  const challenge = await consumeChallenge<{ purpose: string; userId: string; challenge: string }>(ceremonyId);
+  if (!challenge || challenge.purpose !== 'add-passkey' || challenge.userId !== c.get('userId')) {
+    throw new HTTPException(400, { message: 'La ceremonia expiró.' });
+  }
+  const credential = await saveRegistration(challenge.userId, response, challenge.challenge, name);
+  let codes: string[] | undefined;
+  if (c.get('recoveryRequired')) {
+    codes = await replaceRecoveryCodes(challenge.userId);
+    const now = Date.now();
+    await db.update(sessions).set({
+      recoveryRequired: false,
+      expiresAt: new Date(now + 30 * 24 * 60 * 60_000),
+      absoluteExpiresAt: new Date(now + 90 * 24 * 60 * 60_000),
+    }).where(eq(sessions.id, c.get('sessionId')!));
+  }
+  return c.json({ success: true, data: { credential: { id: credential.id, name: credential.name }, recoveryCodes: codes } });
+});
+
+auth.delete('/passkeys/:id', async (c) => {
+  const userId = c.get('userId');
+  const [credentialCount, recoveryCount] = await Promise.all([
+    db.select({ count: count() }).from(passkeyCredentials).where(eq(passkeyCredentials.userId, userId)),
+    db.select({ count: count() }).from(recoveryCodes).where(and(eq(recoveryCodes.userId, userId), isNull(recoveryCodes.usedAt))),
+  ]);
+  if (Number(credentialCount[0]?.count ?? 0) <= 1 && Number(recoveryCount[0]?.count ?? 0) === 0) {
+    throw new HTTPException(409, { message: 'No puedes eliminar la última passkey sin códigos de recuperación activos.' });
+  }
+  const removed = await db.delete(passkeyCredentials).where(and(eq(passkeyCredentials.id, c.req.param('id')), eq(passkeyCredentials.userId, userId))).returning({ id: passkeyCredentials.id });
+  if (!removed[0]) throw new HTTPException(404, { message: 'Passkey no encontrada.' });
+  return c.json({ success: true, data: { deleted: true } });
+});
+
+auth.post('/recovery-codes/rotate', async (c) => {
+  const codes = await replaceRecoveryCodes(c.get('userId'));
+  return c.json({ success: true, data: { recoveryCodes: codes } });
+});
+
+auth.get('/sessions', async (c) => {
+  const items = await db.select({
+    id: sessions.id,
+    userAgent: sessions.userAgent,
+    ipAddress: sessions.ipAddress,
+    createdAt: sessions.createdAt,
+    lastSeenAt: sessions.lastSeenAt,
+    expiresAt: sessions.expiresAt,
+  }).from(sessions).where(and(eq(sessions.userId, c.get('userId')), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())));
+  return c.json({ success: true, data: items.map((item) => ({ ...item, current: item.id === c.get('sessionId') })) });
+});
+
+auth.delete('/sessions/:id', async (c) => {
+  await db.update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.id, c.req.param('id')), eq(sessions.userId, c.get('userId'))));
+  if (c.req.param('id') === c.get('sessionId')) clearSessionCookie(c);
+  return c.json({ success: true, data: { revoked: true } });
+});
+
+auth.delete('/sessions', async (c) => {
+  await db.update(sessions).set({ revokedAt: new Date() }).where(and(eq(sessions.userId, c.get('userId')), ne(sessions.id, c.get('sessionId')!)));
+  return c.json({ success: true, data: { revoked: true } });
+});
 
 export default auth;

@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { TaskStatus, TimeEntrySource, TaskMetadata, Subtask } from '../types';
 
 export const uuidSchema = z.string().uuid();
 
@@ -9,20 +8,6 @@ export const taskMetadataSchema = z.object({
   tags: z.array(z.string()).default([]),
   energyLevel: z.enum(['low', 'medium', 'high']).default('medium'),
   context: z.enum(['deep_work', 'admin', 'creative', 'communication']).default('deep_work'),
-  aiSuggestedBreakdown: z.array(z.object({
-    id: z.string().uuid(),
-    title: z.string().min(1).max(200),
-    completed: z.boolean().default(false),
-    sortOrder: z.number().int().default(0),
-  })).optional(),
-  aiEstimatedDuration: z.number().int().positive().optional(),
-  aiPriorityScore: z.number().min(0).max(1).optional(),
-  agentContext: z.object({
-    relevantFiles: z.array(z.string()).default([]),
-    relatedConversations: z.array(z.string()).default([]),
-    nextActions: z.array(z.string()).default([]),
-  }).optional(),
-  embeddingsVector: z.array(z.number()).optional(),
 }).passthrough();
 
 export const taskSchema = z.object({
@@ -42,6 +27,7 @@ export const taskSchema = z.object({
   updatedAt: isoDateSchema,
   deletedAt: isoDateSchema.optional(),
   version: z.number().int().default(1),
+  lastWriteId: z.string().uuid().optional(),
 });
 
 export const timeEntrySchema = z.object({
@@ -55,6 +41,10 @@ export const timeEntrySchema = z.object({
   deviceId: z.string().min(1),
   metadata: z.record(z.unknown()).default({}),
   syncedAt: isoDateSchema,
+  updatedAt: isoDateSchema,
+  deletedAt: isoDateSchema.optional(),
+  version: z.number().int().default(1),
+  lastWriteId: z.string().uuid().optional(),
 });
 
 export const projectSchema = z.object({
@@ -67,41 +57,56 @@ export const projectSchema = z.object({
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
   archivedAt: isoDateSchema.optional(),
+  deletedAt: isoDateSchema.optional(),
+  version: z.number().int().default(1),
+  lastWriteId: z.string().uuid().optional(),
 });
 
 export const userSchema = z.object({
   id: uuidSchema,
   email: z.string().email(),
-  passkeyCredentialId: z.string().optional(),
-  publicKey: z.string(),
+  name: z.string().min(1).max(120),
+  timezone: z.string(),
+  preferences: z.record(z.unknown()),
   createdAt: isoDateSchema,
   updatedAt: isoDateSchema,
 });
 
 export const createTaskInputSchema = taskSchema.omit({
   id: true,
+  userId: true,
   createdAt: true,
   updatedAt: true,
   deletedAt: true,
   version: true,
   totalTrackedSeconds: true,
+  lastWriteId: true,
 });
 
 export const updateTaskInputSchema = createTaskInputSchema.partial();
 
 export const createTimeEntryInputSchema = timeEntrySchema.omit({
   id: true,
+  userId: true,
   syncedAt: true,
   durationSeconds: true,
+  updatedAt: true,
+  deletedAt: true,
+  version: true,
+  lastWriteId: true,
 });
 
 export const updateTimeEntryInputSchema = createTimeEntryInputSchema.partial();
 
 export const createProjectInputSchema = projectSchema.omit({
   id: true,
+  userId: true,
   createdAt: true,
   updatedAt: true,
   archivedAt: true,
+  deletedAt: true,
+  version: true,
+  lastWriteId: true,
 });
 
 export const updateProjectInputSchema = createProjectInputSchema.partial();

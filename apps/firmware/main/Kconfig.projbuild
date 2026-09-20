@@ -1,0 +1,9 @@
+menu "Productivity Assistant"
+  config PRODUCTIVITY_API_URL
+    string "API base URL"
+    default "https://productivity.local"
+
+  config PRODUCTIVITY_OTA_URL
+    string "Signed OTA manifest URL"
+    default "https://productivity.local/firmware/manifest.json"
+endmenu

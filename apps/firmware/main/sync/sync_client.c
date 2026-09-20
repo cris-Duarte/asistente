@@ -1,253 +1,305 @@
-/**
- * Productivity Assistant - Sync Client Implementation
- * Custom ElectricSQL Shape client for ESP32
- */
+#include "sync/sync_client.h"
 
-#include "sync_client.h"
-#include <stdio.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
-#include "esp_log.h"
-#include "esp_http_client.h"
-#include "esp_crt_bundle.h"
 #include "cJSON.h"
+#include "core/sync_model.h"
+#include "esp_app_desc.h"
+#include "esp_crt_bundle.h"
+#include "esp_http_client.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "network/wifi_manager.h"
 #include "nvs.h"
-#include "nvs_flash.h"
+#include "storage/sqlite_store.h"
 
-static const char *TAG = "SYNC_CLIENT";
+static char s_device_id[64];
+static char s_api_url[192];
+static char s_token[96];
+static char s_pairing_id[40];
+static char s_polling_token[96];
+static int64_t s_next_pair_poll_ms;
+static int64_t s_next_pull_ms;
+static sync_status_callback_t s_status_callback;
+static sync_tasks_callback_t s_tasks_callback;
+static sync_pairing_callback_t s_pairing_callback;
 
-// Configuration
-static char device_id[32] = {0};
-static char server_url[128] = "https://api.productivity-assistant.local";
-static char auth_token[256] = {0};
-static uint64_t last_sync_time = 0;
+typedef struct {
+    char *data;
+    size_t length;
+    size_t capacity;
+} response_buffer_t;
 
-// Mutation queue
-#define MAX_PENDING_MUTATIONS 100
-static SemaphoreHandle_t mutation_mutex = NULL;
-static int pending_count = 0;
-
-// Status callback
-static void (*status_callback)(int, const char *) = NULL;
-
-// Forward declarations
-static void save_mutations_to_nvs(void);
-static void load_mutations_from_nvs(void);
-static esp_err_t http_request(const char *method, const char *path, const char *body, char **response);
-static void process_pull_response(const char *response);
-static void process_push_response(const char *response);
-
-void sync_client_init(const char *dev_id)
+static esp_err_t http_event(esp_http_client_event_t *event)
 {
-    ESP_LOGI(TAG, "Initializing sync client for device: %s", dev_id);
-    
-    strncpy(device_id, dev_id, sizeof(device_id) - 1);
-    
-    // Create mutex for mutation queue
-    mutation_mutex = xSemaphoreCreateMutex();
-    
-    // Load pending mutations from NVS
-    load_mutations_from_nvs();
-    
-    // Load last sync time
-    nvs_handle_t nvs_handle;
-    if (nvs_open("sync", NVS_READONLY, &nvs_handle) == ESP_OK) {
-        size_t required_size = sizeof(last_sync_time);
-        nvs_get_blob(nvs_handle, "last_sync", &last_sync_time, &required_size);
-        nvs_close(nvs_handle);
+    response_buffer_t *buffer = (response_buffer_t *)event->user_data;
+    if (event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) return ESP_OK;
+    size_t required = buffer->length + (size_t)event->data_len + 1;
+    if (required > buffer->capacity) {
+        size_t capacity = required < 4096 ? 4096 : required * 2;
+        char *next = realloc(buffer->data, capacity);
+        if (!next) return ESP_ERR_NO_MEM;
+        buffer->data = next;
+        buffer->capacity = capacity;
     }
-    
-    ESP_LOGI(TAG, "Sync client initialized. Last sync: %" PRIu64, last_sync_time);
+    memcpy(buffer->data + buffer->length, event->data, (size_t)event->data_len);
+    buffer->length += (size_t)event->data_len;
+    buffer->data[buffer->length] = '\0';
+    return ESP_OK;
 }
 
-void sync_client_set_auth_token(const char *token)
+static int request(const char *method, const char *path, const char *body,
+                   const char *idempotency_key, int base_version, char **response)
 {
-    strncpy(auth_token, token, sizeof(auth_token) - 1);
+    char url[320];
+    snprintf(url, sizeof(url), "%s%s", s_api_url, path);
+    response_buffer_t buffer = {0};
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = http_event,
+        .user_data = &buffer,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 15000,
+        .keep_alive_enable = true,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) return 0;
+    if (strcmp(method, "POST") == 0) esp_http_client_set_method(client, HTTP_METHOD_POST);
+    else if (strcmp(method, "PATCH") == 0) esp_http_client_set_method(client, HTTP_METHOD_PATCH);
+    else if (strcmp(method, "DELETE") == 0) esp_http_client_set_method(client, HTTP_METHOD_DELETE);
+    else esp_http_client_set_method(client, HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "Accept", "application/json");
+    if (body) {
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+        esp_http_client_set_post_field(client, body, (int)strlen(body));
+    }
+    if (s_token[0]) {
+        char auth[128];
+        snprintf(auth, sizeof(auth), "Bearer %s", s_token);
+        esp_http_client_set_header(client, "Authorization", auth);
+    }
+    if (idempotency_key) esp_http_client_set_header(client, "Idempotency-Key", idempotency_key);
+    if (base_version > 0) {
+        char version[16];
+        snprintf(version, sizeof(version), "%d", base_version);
+        esp_http_client_set_header(client, "X-Base-Version", version);
+    }
+    esp_err_t result = esp_http_client_perform(client);
+    int status = result == ESP_OK ? esp_http_client_get_status_code(client) : 0;
+    esp_http_client_cleanup(client);
+    if (!buffer.data) buffer.data = strdup("");
+    *response = buffer.data;
+    return status;
 }
 
-void sync_client_set_server_url(const char *url)
+static void save_pairing_state(void)
 {
-    strncpy(server_url, url, sizeof(server_url) - 1);
+    nvs_handle_t nvs;
+    if (nvs_open("device", NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_str(nvs, "token", s_token);
+    nvs_set_str(nvs, "pairing_id", s_pairing_id);
+    nvs_set_str(nvs, "poll_token", s_polling_token);
+    nvs_commit(nvs);
+    nvs_close(nvs);
 }
 
-void sync_client_set_status_callback(void (*callback)(int, const char *))
+static void load_pairing_state(void)
 {
-    status_callback = callback;
+    nvs_handle_t nvs;
+    if (nvs_open("device", NVS_READONLY, &nvs) != ESP_OK) return;
+    size_t size = sizeof(s_token);
+    nvs_get_str(nvs, "token", s_token, &size);
+    size = sizeof(s_pairing_id);
+    nvs_get_str(nvs, "pairing_id", s_pairing_id, &size);
+    size = sizeof(s_polling_token);
+    nvs_get_str(nvs, "poll_token", s_polling_token, &size);
+    nvs_close(nvs);
 }
 
-void sync_client_pull_changes(void)
+static void start_pairing(void)
 {
-    ESP_LOGI(TAG, "Pulling changes from server...");
-    
-    if (status_callback) status_callback(1, "Sincronizando...");
-    
-    // Build request URL with last sync timestamp
-    char url[256];
-    snprintf(url, sizeof(url), "%s/v1/shape?table=tasks&offset=%" PRIu64 "&live=false", server_url, last_sync_time);
-    
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "hardwareId", s_device_id);
+    cJSON_AddStringToObject(root, "name", "M5Stack Tab5");
+    cJSON_AddStringToObject(root, "firmwareVersion", esp_app_get_description()->version);
+    char *body = cJSON_PrintUnformatted(root);
     char *response = NULL;
-    esp_err_t err = http_request("GET", url, NULL, &response);
-    
-    if (err == ESP_OK && response) {
-        process_pull_response(response);
-        free(response);
-        
-        // Update last sync time
-        last_sync_time = esp_timer_get_time() / 1000000; // Convert to seconds
-        
-        // Save to NVS
-        nvs_handle_t nvs_handle;
-        if (nvs_open("sync", NVS_READWRITE, &nvs_handle) == ESP_OK) {
-            nvs_set_blob(nvs_handle, "last_sync", &last_sync_time, sizeof(last_sync_time));
-            nvs_commit(nvs_handle);
-            nvs_close(nvs_handle);
+    int status = request("POST", "/api/devices/pairing/start", body, NULL, 0, &response);
+    cJSON_free(body);
+    cJSON_Delete(root);
+    if (status == 201) {
+        cJSON *json = cJSON_Parse(response);
+        cJSON *data = json ? cJSON_GetObjectItem(json, "data") : NULL;
+        cJSON *pairing = data ? cJSON_GetObjectItem(data, "pairingId") : NULL;
+        cJSON *poll = data ? cJSON_GetObjectItem(data, "pollingToken") : NULL;
+        cJSON *code = data ? cJSON_GetObjectItem(data, "code") : NULL;
+        if (cJSON_IsString(pairing) && cJSON_IsString(poll) && cJSON_IsString(code)) {
+            strlcpy(s_pairing_id, pairing->valuestring, sizeof(s_pairing_id));
+            strlcpy(s_polling_token, poll->valuestring, sizeof(s_polling_token));
+            save_pairing_state();
+            if (s_pairing_callback) s_pairing_callback("");
+            if (s_pairing_callback) s_pairing_callback(code->valuestring);
+            if (s_status_callback) s_status_callback(DEVICE_SYNC_PAIRING, "Confirma el código en Ajustes");
         }
-        
-        if (status_callback) status_callback(2, "Sincronizado");
-    } else {
-        ESP_LOGE(TAG, "Failed to pull changes: %s", esp_err_to_name(err));
-        if (status_callback) status_callback(-1, "Error de sincronización");
+        cJSON_Delete(json);
+    } else if (s_status_callback) {
+        s_status_callback(DEVICE_SYNC_ERROR, "No se pudo iniciar la vinculación");
     }
+    free(response);
+    s_next_pair_poll_ms = esp_timer_get_time() / 1000 + 5000;
 }
 
-void sync_client_push_mutations(void)
+static void poll_pairing(void)
 {
-    // TODO: Implement mutation pushing
-    // This would send queued mutations to the server
-    ESP_LOGI(TAG, "Pushing %d pending mutations", pending_count);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "pairingId", s_pairing_id);
+    cJSON_AddStringToObject(root, "pollingToken", s_polling_token);
+    char *body = cJSON_PrintUnformatted(root);
+    char *response = NULL;
+    int status = request("POST", "/api/devices/pairing/poll", body, NULL, 0, &response);
+    cJSON_free(body);
+    cJSON_Delete(root);
+    if (status == 200) {
+        cJSON *json = cJSON_Parse(response);
+        cJSON *data = json ? cJSON_GetObjectItem(json, "data") : NULL;
+        cJSON *token = data ? cJSON_GetObjectItem(data, "token") : NULL;
+        if (cJSON_IsString(token)) {
+            strlcpy(s_token, token->valuestring, sizeof(s_token));
+            s_pairing_id[0] = '\0';
+            s_polling_token[0] = '\0';
+            save_pairing_state();
+            s_next_pull_ms = 0;
+            if (s_status_callback) s_status_callback(DEVICE_SYNC_SYNCING, "Dispositivo vinculado");
+        }
+        cJSON_Delete(json);
+    } else if (status == 404 || status == 410) {
+        s_pairing_id[0] = '\0';
+        s_polling_token[0] = '\0';
+        save_pairing_state();
+    }
+    free(response);
+    s_next_pair_poll_ms = esp_timer_get_time() / 1000 + 5000;
 }
 
-bool sync_client_queue_mutation(int type, const char *json_payload)
+static bool json_task(cJSON *value, stored_task_t *task)
 {
-    // TODO: Implement mutation queuing to NVS/SD
+    cJSON *id = cJSON_GetObjectItem(value, "id");
+    cJSON *title = cJSON_GetObjectItem(value, "title");
+    cJSON *status = cJSON_GetObjectItem(value, "status");
+    if (!cJSON_IsString(id) || !cJSON_IsString(title) || !cJSON_IsString(status)) return false;
+    memset(task, 0, sizeof(*task));
+    strlcpy(task->id, id->valuestring, sizeof(task->id));
+    strlcpy(task->title, title->valuestring, sizeof(task->title));
+    cJSON *description = cJSON_GetObjectItem(value, "description");
+    if (cJSON_IsString(description)) strlcpy(task->description, description->valuestring, sizeof(task->description));
+    strlcpy(task->status, status->valuestring, sizeof(task->status));
+    cJSON *project = cJSON_GetObjectItem(value, "projectId");
+    if (cJSON_IsString(project)) strlcpy(task->project_id, project->valuestring, sizeof(task->project_id));
+    cJSON *estimate = cJSON_GetObjectItem(value, "estimatedMinutes");
+    cJSON *tracked = cJSON_GetObjectItem(value, "totalTrackedSeconds");
+    cJSON *version = cJSON_GetObjectItem(value, "version");
+    task->estimated_minutes = cJSON_IsNumber(estimate) ? estimate->valueint : 0;
+    task->total_tracked_seconds = cJSON_IsNumber(tracked) ? tracked->valueint : 0;
+    task->version = cJSON_IsNumber(version) ? version->valueint : 1;
+    cJSON *updated = cJSON_GetObjectItem(value, "updatedAt");
+    cJSON *last_write = cJSON_GetObjectItem(value, "lastWriteId");
+    if (cJSON_IsString(updated)) strlcpy(task->updated_at, updated->valuestring, sizeof(task->updated_at));
+    if (cJSON_IsString(last_write)) strlcpy(task->last_write_id, last_write->valuestring, sizeof(task->last_write_id));
     return true;
 }
 
-bool sync_client_has_pending_mutations(void)
+static void pull_tasks(void)
 {
-    return pending_count > 0;
-}
-
-uint64_t sync_client_get_last_sync_time(void)
-{
-    return last_sync_time;
-}
-
-// Private functions
-
-static void load_mutations_from_nvs(void)
-{
-    // TODO: Load pending mutations from NVS
-    pending_count = 0;
-}
-
-static void save_mutations_to_nvs(void)
-{
-    // TODO: Save pending mutations to NVS
-}
-
-static esp_err_t http_request(const char *method, const char *path, const char *body, char **response)
-{
-    esp_http_client_config_t config = {
-        .url = path,
-        .method = strcmp(method, "POST") == 0 ? HTTP_METHOD_POST : HTTP_METHOD_GET,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 10000,
-        .buffer_size = 8192,
-    };
-    
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        return ESP_FAIL;
-    }
-    
-    // Set headers
-    if (strlen(auth_token) > 0) {
-        char auth_header[512];
-        snprintf(auth_header, sizeof(auth_header), "Bearer %s", auth_token);
-        esp_http_client_set_header(client, "Authorization", auth_header);
-    }
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, "X-Device-ID", device_id);
-    
-    if (body) {
-        esp_http_client_set_post_field(client, body, strlen(body));
-    }
-    
-    esp_err_t err = esp_http_client_perform(client);
-    
-    if (err == ESP_OK) {
-        int status_code = esp_http_client_get_status_code(client);
-        int content_length = esp_http_client_get_content_length(client);
-        
-        if (status_code >= 200 && status_code < 300) {
-            *response = malloc(content_length + 1);
-            if (*response) {
-                int read_len = esp_http_client_read_response(client, *response, content_length);
-                (*response)[read_len] = '\0';
-            }
-        } else {
-            ESP_LOGE(TAG, "HTTP error: %d", status_code);
-            err = ESP_FAIL;
+    char *response = NULL;
+    int status = request("GET", "/api/tasks?pageSize=500&includeDeleted=false", NULL, NULL, 0, &response);
+    if (status == 401 || status == 403) {
+        s_token[0] = '\0';
+        save_pairing_state();
+    } else if (sync_is_success_status(status)) {
+        cJSON *json = cJSON_Parse(response);
+        cJSON *data = json ? cJSON_GetObjectItem(json, "data") : NULL;
+        cJSON *items = data ? cJSON_GetObjectItem(data, "items") : NULL;
+        cJSON *item = NULL;
+        cJSON_ArrayForEach(item, items) {
+            stored_task_t task;
+            if (json_task(item, &task)) sqlite_store_task_upsert_server(&task);
         }
+        cJSON_Delete(json);
+        if (s_tasks_callback) s_tasks_callback();
+        if (s_status_callback) s_status_callback(DEVICE_SYNC_SYNCED, "Sincronizado");
+    } else if (s_status_callback) {
+        s_status_callback(DEVICE_SYNC_ERROR, "Error al leer tareas");
     }
-    
-    esp_http_client_cleanup(client);
-    return err;
+    free(response);
+    s_next_pull_ms = esp_timer_get_time() / 1000 + 30000;
 }
 
-static void process_pull_response(const char *response)
+static void flush_one(void)
 {
-    cJSON *root = cJSON_Parse(response);
-    if (!root) {
-        ESP_LOGE(TAG, "Failed to parse JSON response");
+    int64_t now = esp_timer_get_time() / 1000;
+    stored_mutation_t mutation;
+    if (!sqlite_store_mutation_next(now, &mutation)) return;
+    char *response = NULL;
+    int status = request(mutation.method, mutation.path, mutation.payload[0] ? mutation.payload : NULL,
+                         mutation.id, mutation.base_version, &response);
+    if (sync_is_success_status(status)) {
+        sqlite_store_mutation_complete(mutation.id);
+        if (strcmp(mutation.entity, "tasks") == 0) {
+            cJSON *json = cJSON_Parse(response);
+            cJSON *data = json ? cJSON_GetObjectItem(json, "data") : NULL;
+            stored_task_t task;
+            if (data && json_task(data, &task)) sqlite_store_task_upsert_server(&task);
+            cJSON_Delete(json);
+        }
+    } else if (status == 409) {
+        sqlite_store_mutation_conflict(mutation.id, response);
+        if (s_status_callback) s_status_callback(DEVICE_SYNC_CONFLICT, "Conflicto pendiente en Tab5");
+    } else {
+        int attempts = mutation.attempts + 1;
+        sqlite_store_mutation_retry(mutation.id, attempts, now + sync_backoff_ms((uint32_t)attempts));
+    }
+    free(response);
+}
+
+void sync_client_init(const char *device_id, const char *api_url,
+                      sync_status_callback_t status_callback,
+                      sync_tasks_callback_t tasks_callback,
+                      sync_pairing_callback_t pairing_callback)
+{
+    strlcpy(s_device_id, device_id, sizeof(s_device_id));
+    strlcpy(s_api_url, api_url, sizeof(s_api_url));
+    size_t length = strlen(s_api_url);
+    while (length && s_api_url[length - 1] == '/') s_api_url[--length] = '\0';
+    s_status_callback = status_callback;
+    s_tasks_callback = tasks_callback;
+    s_pairing_callback = pairing_callback;
+    load_pairing_state();
+}
+
+void sync_client_tick(void)
+{
+    int64_t now = esp_timer_get_time() / 1000;
+    if (!wifi_manager_is_connected()) {
+        if (s_status_callback) s_status_callback(DEVICE_SYNC_OFFLINE, "Sin conexión");
         return;
     }
-    
-    // Process tasks
-    cJSON *tasks = cJSON_GetObjectItem(root, "tasks");
-    if (tasks && cJSON_IsArray(tasks)) {
-        int task_count = cJSON_GetArraySize(tasks);
-        ESP_LOGI(TAG, "Received %d tasks", task_count);
-        
-        // TODO: Process tasks and store in SQLite
-        for (int i = 0; i < task_count; i++) {
-            cJSON *task = cJSON_GetArrayItem(tasks, i);
-            // Process each task
-        }
+    if (!s_token[0]) {
+        if (!s_pairing_id[0]) start_pairing();
+        else if (now >= s_next_pair_poll_ms) poll_pairing();
+        return;
     }
-    
-    // Process time entries
-    cJSON *time_entries = cJSON_GetObjectItem(root, "time_entries");
-    if (time_entries && cJSON_IsArray(time_entries)) {
-        int entry_count = cJSON_GetArraySize(time_entries);
-        ESP_LOGI(TAG, "Received %d time entries", entry_count);
-        
-        // TODO: Process time entries and store in SQLite
-    }
-    
-    // Process projects
-    cJSON *projects = cJSON_GetObjectItem(root, "projects");
-    if (projects && cJSON_IsArray(projects)) {
-        int project_count = cJSON_GetArraySize(projects);
-        ESP_LOGI(TAG, "Received %d projects", project_count);
-        
-        // TODO: Process projects and store in SQLite
-    }
-    
-    cJSON_Delete(root);
+    if (s_status_callback) s_status_callback(DEVICE_SYNC_SYNCING, "Sincronizando");
+    flush_one();
+    if (now >= s_next_pull_ms) pull_tasks();
 }
 
-static void process_push_response(const char *response)
+void sync_client_force_pull(void)
 {
-    // Process server response after push
-    cJSON *root = cJSON_Parse(response);
-    if (root) {
-        // Check for conflicts, etc.
-        cJSON_Delete(root);
-    }
+    s_next_pull_ms = 0;
+}
+
+bool sync_client_is_paired(void)
+{
+    return s_token[0] != '\0';
 }

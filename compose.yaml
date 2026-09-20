@@ -1,0 +1,135 @@
+name: productivity-assistant
+
+x-app-environment: &app-environment
+  DATABASE_URL: postgresql://postgres:postgres@postgres:5432/productivity?sslmode=disable
+  REDIS_URL: redis://redis:6379
+  ELECTRIC_URL: http://electric:3000
+  APP_URL: http://localhost:5173
+  APP_ORIGINS: http://localhost:5173
+  WEBAUTHN_RP_ID: localhost
+  WEBAUTHN_ORIGIN: http://localhost:5173
+  COOKIE_SECURE: "false"
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: productivity
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init-sql:/docker-entrypoint-initdb.d:ro
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d productivity"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4.1-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  electric:
+    image: electricsql/electric:1.8.0
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/productivity?sslmode=disable
+      ELECTRIC_INSECURE: "true"
+    ports:
+      - "${ELECTRIC_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: development
+    environment: *app-environment
+    command: ["pnpm", "--filter", "@productivity-assistant/db-schema", "db:migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: development
+    environment: *app-environment
+    ports:
+      - "${API_PORT:-8787}:8787"
+    volumes:
+      - ./apps/api/src:/workspace/apps/api/src
+      - ./packages/shared/src:/workspace/packages/shared/src
+      - ./packages/db-schema/src:/workspace/packages/db-schema/src
+      - workspace_node_modules:/workspace/node_modules
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      electric:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: development
+    environment:
+      VITE_API_URL: http://localhost:${API_PORT:-8787}
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    volumes:
+      - ./apps/web/src:/workspace/apps/web/src
+      - ./apps/web/public:/workspace/apps/web/public
+      - ./packages/shared/src:/workspace/packages/shared/src
+      - ./packages/electric-client/src:/workspace/packages/electric-client/src
+      - workspace_node_modules:/workspace/node_modules
+    depends_on:
+      api:
+        condition: service_healthy
+
+  firmware:
+    profiles: ["firmware"]
+    build:
+      context: .
+      dockerfile: apps/firmware/Dockerfile
+    volumes:
+      - ./apps/firmware:/project
+      - firmware_components:/project/managed_components
+      - firmware_build:/project/build
+    environment:
+      DISPLAY_VARIANT: ${DISPLAY_VARIANT:-st7123}
+
+volumes:
+  postgres_data:
+  redis_data:
+  firmware_components:
+  firmware_build:
+  workspace_node_modules:

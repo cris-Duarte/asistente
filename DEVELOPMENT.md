@@ -1,201 +1,113 @@
-# Development Commands & Setup
+# Desarrollo y validación
 
-## Prerequisites
-- Node.js 22+
-- pnpm 9+
-- Docker & Docker Compose
-- Python 3.10+
-- ESP-IDF 5.x (for M5Stack Tab5 firmware)
+## Entorno
 
-## Quick Start
+El entorno canónico es Docker. Las versiones principales están fijadas: Node 22, pnpm 9.4, PostgreSQL 16.4, Redis 7.4.1, Electric 1.8.0 y ESP-IDF 5.4.2.
 
-### 1. Start Infrastructure (PostgreSQL + ElectricSQL)
 ```bash
-cd /Users/cristhianduarte/Documents/Asistente
-docker compose -f infra/docker-compose.yml up -d
+cp .env.example .env
+docker compose up --build
 ```
 
-### 2. Run Database Migrations
+El servicio `migrate` debe terminar con código 0 antes de iniciar la API. `docker compose ps` debe mostrar saludables `postgres`, `redis`, `electric` y `api`.
+
+Para ejecutar el código TypeScript directamente:
+
 ```bash
-cd packages/db-schema
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/productivity?sslmode=disable pnpm db:migrate
+corepack enable
+corepack prepare pnpm@9.4.0 --activate
+pnpm install --frozen-lockfile
+docker compose up -d postgres redis electric migrate
+pnpm dev:local
 ```
 
-### 3. Start API Server (Local Development)
+## Propietario y autenticación
+
+`owner:init` es idempotente respecto a la cuenta: la primera ejecución crea el propietario y las posteriores sólo pueden emitir un nuevo token de configuración mientras no exista una passkey.
+
 ```bash
-cd apps/api
-# Set environment variables
-export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/productivity?sslmode=disable
-export DATABASE_URL_UNPOOLED=postgresql://postgres:postgres@127.0.0.1:5432/productivity?sslmode=disable
-export JWT_SECRET=dev-jwt-secret-at-least-32-characters-long
-export ELECTRIC_URL=http://localhost:3000
-export ELECTRIC_SECRET=dev-secret
-
-# Run minimal API server (Node.js + Neon serverless)
-node minimal_api.js
-# API available at http://localhost:8787
+OWNER_EMAIL=propietario@local OWNER_NAME=Propietario \
+  docker compose exec api pnpm --filter @productivity-assistant/api owner:init
 ```
 
-### 4. Start Web App
+En la imagen optimizada se usa el CLI ya compilado:
+
 ```bash
-cd apps/web
-pnpm dev
-# Web App available at http://localhost:5173
+OWNER_EMAIL=propietario@local OWNER_NAME=Propietario \
+  docker compose -f compose.prod.yaml exec api owner:init
 ```
 
-### 5. Verify ElectricSQL Sync Service
+El secreto viaja en el fragmento del enlace, por lo que no llega al servidor ni a logs HTTP. El desafío WebAuthn se guarda en Redis con expiración y consumo único. El servidor valida `Origin` y `RP_ID`. Después del alta, el login descubre la credencial residente sin solicitar email.
+
+La cookie de sesión es `HttpOnly` y `SameSite=Strict`; sólo `COOKIE_SECURE=false` en la composición local permite HTTP. La sesión móvil rueda hasta 30 días y nunca supera 90 días. Una recuperación consume el código, exige registrar otra passkey y rota todos los códigos.
+
+## Calidad
+
 ```bash
-curl http://localhost:3000/v1/health
-# Should return: {"status":"active"}
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-## Service URLs (Local Development)
-- **Web App**: http://localhost:5173
-- **API Server**: http://localhost:8787
-- **ElectricSQL Sync**: http://localhost:3000
-- **PostgreSQL**: postgresql://postgres:postgres@localhost:5432/productivity
-- **ElectricSQL Shape Endpoint**: http://localhost:3000/v1/shape?table=tasks
+La CI repite estas comprobaciones, aplica migraciones en una base vacía, construye y levanta las imágenes Docker, ejecuta un respaldo/restauración y compila ambas matrices de firmware. No hay pasos de despliegue.
 
-## Database Schema
-Run migrations from `packages/db-schema`:
+## Sincronización y conflictos
+
+PGlite es la única base local por propietario. `packages/electric-client` normaliza filas `snake_case` de Electric y DTO `camelCase` de la API. La tabla local `outbox` contiene UUID, entidad, recurso, versión base, cuerpo, intentos y próximo reintento.
+
+Para probar el modo offline:
+
+1. Abre DevTools, activa Offline y crea o modifica una tarea.
+2. Recarga la página y comprueba que el dato y el contador pendiente siguen visibles.
+3. Recupera la red. La operación debe enviarse una sola vez y desaparecer al regresar por Electric.
+4. Edita la misma versión desde otro cliente. Ajustes debe mostrar el conflicto y permitir conservar la copia local o aceptar el servidor.
+
+El service worker conserva la interfaz. La cola no depende de Background Sync y vuelve a intentar también al abrir la aplicación o recuperar el evento `online`.
+
+## Respaldo y restauración
+
 ```bash
-cd packages/db-schema
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/productivity?sslmode=disable pnpm db:migrate
+BACKUP_DIR=backups sh infra/scripts/backup.sh
+sh infra/scripts/restore.sh backups/productivity-YYYYMMDDTHHMMSSZ.sql.gz
 ```
 
-## Project Structure
-```
-asistente/
-├── apps/
-│   ├── api/                 # Node.js API server (Hono + Neon)
-│   ├── web/                 # React + Vite + PWA (ElectricSQL client)
-│   └── firmware/            # ESP-IDF + LVGL (M5Stack Tab5)
-├── packages/
-│   ├── shared/              # Shared types & Zod schemas
-    ├── db-schema/           # Drizzle ORM schema & migrations
-    └── electric-client/     # ElectricSQL client integration
-├── infra/
-│   ├── docker-compose.yml   # Postgres + ElectricSQL + Redis
-    ├── fly.toml             # ElectricSQL deployment config
-    └── init-sql/            # DB initialization scripts
-└── .github/workflows/       # CI/CD pipelines
-```
+Los respaldos contienen órdenes `DROP ... IF EXISTS`, de modo que la restauración sustituye los objetos respaldados y falla ante cualquier error SQL.
 
-## Key Integration Points Verified
+## Firmware
 
-✅ **PostgreSQL** - Running on port 5432, accepting connections
-✅ **ElectricSQL Sync** - Running on port 3000, streaming logical replication
-✅ **PostgreSQL → ElectricSQL** - Logical replication slot active
-✅ **API Server** - Running on port 8787, CRUD operations working
-✅ **Database Persistence** - Tasks created via API are stored in PostgreSQL
-✅ **ElectricSQL Sync** - Shape endpoint serving `/v1/shape?table=tasks`
-✅ **Web App** - Vite dev server running on port 5173
-✅ **ElectricSQL Client** - `@electric-sql/pglite` + `@electric-sql/pglite-sync` integrated
+El contenedor descarga revisiones fijas del BSP oficial de M5Stack, LVGL y SQLite sobre ESP-IDF 5.4.2. Compila primero las pruebas nativas de serialización, orden y reintento.
 
-## Testing Integration
-
-### Create a Task
 ```bash
-curl -X POST http://localhost:8787/api/tasks \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <valid-jwt>" \
-  -H "X-User-ID: <user-id>" \
-  -H "X-Device-ID: web" \
-  -d '{"title":"Test Task","description":"Test","status":"pending","userId":"<user-uuid>"}'
+# Las dos variantes
+DISPLAY_VARIANT=all docker compose --profile firmware run --rm firmware
+
+# Una variante
+DISPLAY_VARIANT=st7121 docker compose --profile firmware run --rm firmware
+DISPLAY_VARIANT=st7123 docker compose --profile firmware run --rm firmware
 ```
 
-### List Tasks
-```bash
-curl http://localhost:8787/api/tasks \
-  -H "Authorization: Bearer <valid-jwt>" \
-  -H "X-User-ID: <user-id>"
-```
+Los binarios quedan en `apps/firmware/artifacts/<variante>/`. El flasheo y monitor se hacen desde macOS con ESP-IDF 5.4.2, usando el `flash_args` generado:
 
-### Check ElectricSQL Sync
-```bash
-curl http://localhost:3000/v1/shape?table=tasks
-# Should return shape data with tasks
-```
-
-## Firmware Development (M5Stack Tab5)
-
-### Prerequisites
-```bash
-# Install ESP-IDF v5.x
-git clone -b v5.1 --recursive https://github.com/espressif/esp-idf.git
-cd esp-idf
-./install.sh esp32p4
-. ./export.sh
-```
-
-### Build & Flash
 ```bash
 cd apps/firmware
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
+python "$IDF_PATH/components/esptool_py/esptool/esptool.py" \
+  --chip esp32p4 --port /dev/cu.usbmodemXXXX write_flash @artifacts/st7123/flash_args
+idf.py -p /dev/cu.usbmodemXXXX monitor
 ```
 
-### Key Firmware Components
-- **UI**: LVGL v9 on 1280x720 ST7121 display
-- **Storage**: SQLite (esp-sqlite3) with identical schema
-- **Sync**: Custom ElectricSQL Shape client (HTTP long-polling)
-- **Peripherals**: ST7121 touch, BMI270 IMU, RX8130CE RTC, INA226 battery monitor
-- **Power**: Deep sleep with touch/button/IMU/RTC wake sources
-- **OTA**: HTTPS firmware updates via API
+`sdkconfig.production` prepara binarios firmados y rollback, pero deja Secure Boot, Flash Encryption y NVS Encryption desactivados. Actívalos sólo durante un procedimiento de aprovisionamiento documentado y revisado: ESP-IDF puede programar eFuses de forma irreversible en el primer arranque. Ningún script de este repositorio los quema automáticamente.
 
-## Deployment
+La integración física pendiente se valida en una Tab5: táctil de ambas revisiones, escaneo/alta Wi-Fi mediante ESP32-C6 por SDIO, batería/reloj, suspensión, vinculación, sincronización entre dos clientes, OTA firmada y rollback.
 
-### ElectricSQL (Fly.io)
-```bash
-cd infra
-fly deploy -c fly.toml
-```
+## Variables importantes
 
-### API (Cloudflare Workers)
-```bash
-cd apps/api
-wrangler deploy
-```
-
-### Web App (Cloudflare Pages)
-```bash
-cd apps/web
-pnpm build
-wrangler pages deploy dist --project-name=productivity-assistant
-```
-
-### Database (Neon/Cloudflare D1)
-Configure secrets in Cloudflare dashboard:
-- `DATABASE_URL`
-- `JWT_SECRET`
-- `ELECTRIC_URL`
-- `ELECTRIC_SECRET`
-- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
-
-## Troubleshooting
-
-### Database Connection Issues
-- Ensure PostgreSQL is healthy: `docker compose -f infra/docker-compose.yml ps`
-- Check ElectricSQL logs: `docker logs productivity-electric`
-- Verify connection string uses `127.0.0.1` not `localhost` (Docker networking)
-
-### ElectricSQL Sync Issues
-- Check replication slot: `SELECT * FROM pg_replication_slots;`
-- Verify publication: `SELECT * FROM pg_publication;`
-- Check ElectricSQL logs: `docker logs productivity-electric -f`
-
-### API Connection Issues
-- Verify `DATABASE_URL` uses `127.0.0.1` not `localhost`
-- Check Neon serverless driver compatibility
-- Verify JWT_SECRET is set and ≥32 characters
-
-### Web App Sync Issues
-- Check browser console for ElectricSQL client errors
-- Verify `VITE_ELECTRIC_URL` points to `http://localhost:3000`
-- Check PWA service worker registration
-
-## Next Phases
-- **Phase 5**: Full Web App + ElectricSQL client integration
-- **Phase 6**: M5Stack Tab5 firmware integration testing
-- **Phase 7**: Passkey/WebAuthn authentication flow
-- **Phase 8**: AI agent integration (event store, MCP server)
+| Variable | Uso |
+| --- | --- |
+| `APP_URL` | Base usada al imprimir el enlace inicial |
+| `APP_ORIGINS` | Lista de orígenes CORS permitidos |
+| `WEBAUTHN_RP_ID` | RP ID exacto de WebAuthn |
+| `WEBAUTHN_ORIGIN` | Origen HTTPS exacto de WebAuthn |
+| `COOKIE_SECURE` | Debe permanecer `true` fuera del modo local |
+| `ELECTRIC_SECRET` | Sólo API y Electric; nunca se incluye en el cliente |
+| `CONFIG_PRODUCTIVITY_API_URL` | API HTTPS que usa el firmware |

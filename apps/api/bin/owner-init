@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+exec node /workspace/apps/api/dist/owner-init.mjs "$@"

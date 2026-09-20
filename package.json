@@ -7,7 +7,17 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "docker compose --profile dev up --build",
+    "dev:local": "pnpm --parallel --filter @productivity-assistant/api --filter @productivity-assistant/web run dev:local",
+    "infra:up": "docker compose --profile dev up -d postgres redis electric migrate",
+    "infra:stop": "docker compose down",
+    "docker:build": "docker compose --profile dev build",
+    "docker:prod": "docker compose -f compose.prod.yaml build",
+    "docker:logs": "docker compose logs -f api web electric",
+    "owner:init": "docker compose exec api pnpm --filter @productivity-assistant/api owner:init",
+    "backup": "sh infra/scripts/backup.sh",
+    "restore": "sh infra/scripts/restore.sh",
+    "firmware:build": "docker compose --profile firmware run --rm firmware",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
@@ -18,6 +28,10 @@
     "format": "prettier --write \"**/*.{ts,tsx,json,md,yaml,yml}\""
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.44.0",
+    "@typescript-eslint/parser": "^8.44.0",
+    "eslint": "^9.0.0",
     "turbo": "^2.0.0",
     "prettier": "^3.3.0",
     "typescript": "^5.5.0",
@@ -25,6 +39,6 @@
   },
   "packageManager": "pnpm@9.4.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

@@ -1,88 +1,43 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { electricClient, type ElectricClientConfig } from '../lib/electric';
-import { useAuthStore } from '../stores/authStore';
-import { toastHelpers } from '../components/ui/Toaster';
-
-interface ElectricProviderProps {
-  children: ReactNode;
-}
+import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { electricClient, useOfflineData, type Conflict } from '@productivity-assistant/electric-client';
+import { useAuthStore } from '@/stores/authStore';
+import { API_URL } from '@/lib/api';
 
 interface ElectricContextValue {
   isInitialized: boolean;
   isSyncing: boolean;
   isSynced: boolean;
   syncError: Error | null;
+  pending: number;
+  conflicts: Conflict[];
   client: typeof electricClient;
-  initialize: (config: ElectricClientConfig) => Promise<void>;
-  destroy: () => Promise<void>;
 }
 
 const ElectricContext = createContext<ElectricContextValue | null>(null);
 
-export function ElectricProvider({ children }: ElectricProviderProps) {
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncError, setSyncError] = useState<Error | null>(null);
-  const { user, token, isAuthenticated } = useAuthStore();
+export function ElectricProvider({ children }: { children: ReactNode }) {
+  const user = useAuthStore((state) => state.user);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const snapshot = useOfflineData();
 
-  const initialize = async (config: ElectricClientConfig) => {
-    if (isInitialized) return;
-    try {
-      setIsSyncing(true);
-      setSyncError(null);
-      await electricClient.initialize(config);
-      setIsInitialized(true);
-      toastHelpers.success('Sincronización iniciada', 'Conectado a ElectricSQL');
-    } catch (error) {
-      setSyncError(error as Error);
-      toastHelpers.error('Error de sincronización', (error as Error).message);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  const destroy = async () => {
-    await electricClient.destroy();
-    setIsInitialized(false);
-  };
-
-  // Auto-initialize when user is authenticated
   useEffect(() => {
-    if (isAuthenticated && user && token && !isInitialized) {
-      initialize({
-        electricUrl: import.meta.env.VITE_ELECTRIC_URL || 'http://localhost:3000',
-        userId: user.id,
-        authToken: token,
-        persistenceKey: `electric-${user.id}`,
-      });
-    } else if (!isAuthenticated && isInitialized) {
-      destroy();
-    }
-  }, [isAuthenticated, user, token, isInitialized]);
+    if (isAuthenticated && user) void electricClient.initialize(user.id, API_URL);
+    if (!isAuthenticated) void electricClient.destroy();
+  }, [isAuthenticated, user?.id]);
 
-  const isSynced = electricClient.isSynced();
-
-  return (
-    <ElectricContext.Provider
-      value={{
-        isInitialized,
-        isSyncing,
-        isSynced,
-        syncError,
-        client: electricClient,
-        initialize,
-        destroy,
-      }}
-    >
-      {children}
-    </ElectricContext.Provider>
-  );
+  return <ElectricContext.Provider value={{
+    isInitialized: snapshot.ready,
+    isSyncing: snapshot.phase === 'syncing' || snapshot.phase === 'connecting',
+    isSynced: snapshot.phase === 'synced',
+    syncError: snapshot.error ? new Error(snapshot.error) : null,
+    pending: snapshot.pending,
+    conflicts: snapshot.conflicts,
+    client: electricClient,
+  }}>{children}</ElectricContext.Provider>;
 }
 
 export function useElectric() {
   const context = useContext(ElectricContext);
-  if (!context) {
-    throw new Error('useElectric must be used within an ElectricProvider');
-  }
+  if (!context) throw new Error('useElectric debe usarse dentro de ElectricProvider');
   return context;
 }

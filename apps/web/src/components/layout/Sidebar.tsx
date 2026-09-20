@@ -10,7 +10,6 @@ import {
   ChevronLeft,
   LogOut,
   User,
-  Bell,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useAuthStore } from '@/stores/authStore';
@@ -97,7 +96,7 @@ export function Sidebar() {
         {!collapsed && (
           <div className="mt-4 flex items-center gap-2">
             <button
-              onClick={() => logout()}
+              onClick={() => void logout()}
               className="flex-1 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
             >
               <LogOut className="h-4 w-4" />

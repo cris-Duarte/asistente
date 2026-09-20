@@ -20,4 +20,7 @@ build-*/
 
 # ESP-IDF
 managed_components/
-dependencies.lock
+sdkconfig
+sdkconfig.st7121
+sdkconfig.st7123
+artifacts/

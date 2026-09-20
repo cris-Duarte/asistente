@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode, Fragment } from 'react';
+import { createContext, useContext, ReactNode, Fragment } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 

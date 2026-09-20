@@ -8,6 +8,13 @@
       "when": 1789846313473,
       "tag": "0000_thick_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789884000000,
+      "tag": "0001_owner_offline",
+      "breakpoints": true
     }
   ]
 }

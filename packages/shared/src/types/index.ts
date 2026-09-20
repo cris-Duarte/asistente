@@ -1,5 +1,5 @@
-export type UUID = string & { readonly __brand: unique symbol };
-export type ISODateString = string & { readonly __brand: unique symbol };
+export type UUID = string;
+export type ISODateString = string;
 
 export function uuid(v: string): UUID {
   return v as UUID;
@@ -15,6 +15,7 @@ export interface BaseEntity {
   updatedAt: ISODateString;
   deletedAt?: ISODateString;
   version: number;
+  lastWriteId?: string;
 }
 
 export type TaskStatus = 'pending' | 'active' | 'paused' | 'done' | 'archived';
@@ -38,15 +39,6 @@ export interface TaskMetadata {
   tags: string[];
   energyLevel: 'low' | 'medium' | 'high';
   context: 'deep_work' | 'admin' | 'creative' | 'communication';
-  aiSuggestedBreakdown?: Subtask[];
-  aiEstimatedDuration?: number;
-  aiPriorityScore?: number;
-  agentContext?: {
-    relevantFiles: string[];
-    relatedConversations: string[];
-    nextActions: string[];
-  };
-  embeddingsVector?: number[];
   [key: string]: unknown;
 }
 
@@ -57,7 +49,8 @@ export interface Subtask {
   sortOrder: number;
 }
 
-export interface TimeEntry extends BaseEntity {
+export interface TimeEntry {
+  id: UUID;
   taskId: UUID;
   userId: UUID;
   startedAt: ISODateString;
@@ -66,6 +59,11 @@ export interface TimeEntry extends BaseEntity {
   source: TimeEntrySource;
   deviceId: string;
   metadata: Record<string, unknown>;
+  syncedAt: ISODateString;
+  updatedAt: ISODateString;
+  deletedAt?: ISODateString;
+  version: number;
+  lastWriteId?: string;
 }
 
 export interface Project extends BaseEntity {
@@ -79,8 +77,9 @@ export interface Project extends BaseEntity {
 
 export interface User extends BaseEntity {
   email: string;
-  passkeyCredentialId?: string;
-  publicKey: string;
+  name: string;
+  timezone: string;
+  preferences: Record<string, unknown>;
 }
 
 export interface SyncState {

@@ -1,67 +1,42 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { apiRequest } from '@/lib/api';
 
-interface User {
+export interface Owner {
   id: string;
   email: string;
-  name?: string;
+  name: string;
+  timezone: string;
+  preferences: Record<string, unknown>;
+  passkeyCount?: number;
+  recoveryRequired?: boolean;
 }
 
 interface AuthState {
-  user: User | null;
-  token: string | null;
+  user: Owner | null;
+  status: 'loading' | 'authenticated' | 'anonymous';
   isAuthenticated: boolean;
-  login: (user: User, token: string) => void;
-  logout: () => void;
-  updateUser: (user: Partial<User>) => void;
-  setToken: (token: string | null) => void;
+  bootstrap: () => Promise<void>;
+  login: (user: Owner) => void;
+  logout: () => Promise<void>;
+  updateUser: (user: Partial<Owner>) => void;
 }
 
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
-      user: null,
-      token: null,
-      isAuthenticated: false,
-      login: (user, token) => {
-        set({ user, token, isAuthenticated: true });
-        // Also set cookie for middleware
-        document.cookie = `access_token=${token}; path=/; max-age=${15 * 60}; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`;
-      },
-      logout: () => {
-        set({ user: null, token: null, isAuthenticated: false });
-        document.cookie = 'access_token=; path=/; max-age=0; SameSite=Strict';
-      },
-      updateUser: (userData) => set(state => ({ user: state.user ? { ...state.user, ...userData } : null })),
-      setToken: (token) => {
-        set({ token, isAuthenticated: !!token });
-        if (token) {
-          document.cookie = `access_token=${token}; path=/; max-age=${15 * 60}; SameSite=Strict${location.protocol === 'https:' ? '; Secure' : ''}`;
-        } else {
-          document.cookie = 'access_token=; path=/; max-age=0; SameSite=Strict';
-        }
-      },
-    }),
-    {
-      name: 'auth-storage',
-      partialize: (state) => ({
-        user: state.user,
-        token: state.token,
-        isAuthenticated: state.isAuthenticated,
-      }),
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  status: 'loading',
+  isAuthenticated: false,
+  bootstrap: async () => {
+    try {
+      const user = await apiRequest<Owner>('/api/auth/me');
+      set({ user, status: 'authenticated', isAuthenticated: true });
+    } catch {
+      set({ user: null, status: 'anonymous', isAuthenticated: false });
     }
-  )
-);
-
-// Initialize token from cookie on client side
-if (typeof window !== 'undefined') {
-  const cookies = document.cookie.split('; ').reduce((acc, cookie) => {
-    const [key, value] = cookie.split('=');
-    acc[key] = value;
-    return acc;
-  }, {} as Record<string, string>);
-
-  if (cookies.access_token && !useAuthStore.getState().token) {
-    useAuthStore.getState().setToken(cookies.access_token);
-  }
-}
+  },
+  login: (user) => set({ user, status: 'authenticated', isAuthenticated: true }),
+  logout: async () => {
+    try { await apiRequest('/api/auth/logout', { method: 'POST' }); }
+    finally { set({ user: null, status: 'anonymous', isAuthenticated: false }); }
+  },
+  updateUser: (partial) => set((state) => ({ user: state.user ? { ...state.user, ...partial } : null })),
+}));

@@ -1,0 +1,12 @@
+.git
+node_modules
+**/node_modules
+**/dist
+**/build
+apps/firmware/managed_components
+apps/firmware/sdkconfig
+.env
+.env.*
+infra/.env
+coverage
+packages/ai-agent

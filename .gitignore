@@ -34,6 +34,7 @@ pnpm-debug.log*
 
 # Testing
 coverage
+backups/
 
 # Database
 *.sqlite
@@ -49,9 +50,12 @@ coverage
 # Firmware
 apps/firmware/build
 apps/firmware/managed_components
-apps/firmware/dependencies.lock
 
 # Misc
 *.pem
 .vercel
 .netlify
+
+# Docker build outputs
+apps/*/dist
+apps/*/build

@@ -1,0 +1,112 @@
+name: productivity-assistant-prod
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: productivity
+      POSTGRES_USER: productivity
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init-sql:/docker-entrypoint-initdb.d:ro
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U productivity -d productivity"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4.1-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  electric:
+    image: electricsql/electric:1.8.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://productivity:${POSTGRES_PASSWORD}@postgres:5432/productivity?sslmode=disable
+      ELECTRIC_SECRET: ${ELECTRIC_SECRET:?ELECTRIC_SECRET is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: build
+    environment: &api-env
+      DATABASE_URL: postgresql://productivity:${POSTGRES_PASSWORD}@postgres:5432/productivity?sslmode=disable
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      ELECTRIC_URL: http://electric:3000
+      ELECTRIC_SECRET: ${ELECTRIC_SECRET}
+      APP_URL: https://${APP_DOMAIN:?APP_DOMAIN is required}
+      APP_ORIGINS: https://${APP_DOMAIN}
+      WEBAUTHN_RP_ID: ${APP_DOMAIN}
+      WEBAUTHN_ORIGIN: https://${APP_DOMAIN}
+      COOKIE_SECURE: "true"
+    command: ["pnpm", "--filter", "@productivity-assistant/db-schema", "db:migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: production
+    restart: unless-stopped
+    environment: *api-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      electric:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: production
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+
+  proxy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:

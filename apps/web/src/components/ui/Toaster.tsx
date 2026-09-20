@@ -58,7 +58,7 @@ export function useToasts() {
   useEffect(() => {
     const listener = () => setTick(t => t + 1);
     listeners.add(listener);
-    return () => listeners.delete(listener);
+    return () => { listeners.delete(listener); };
   }, []);
 
   const dismiss = (id: string) => {
