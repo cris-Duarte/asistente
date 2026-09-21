@@ -117,11 +117,17 @@ async function mutate(c: Context<{ Variables: AuthVariables }>, handler: (tx: an
   if (!key || key.length < 16 || key.length > 200) throw new HTTPException(400, { message: 'Idempotency-Key es obligatorio.' });
   const userId = c.get('userId');
   const result = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${userId}:${key}`}, 0))`);
     const cached = await tx.select().from(mutationReceipts).where(and(
       eq(mutationReceipts.userId, userId),
       eq(mutationReceipts.idempotencyKey, key),
     )).limit(1);
-    if (cached[0]) return { status: cached[0].statusCode, data: cached[0].response };
+    if (cached[0]) {
+      if (cached[0].method !== c.req.method || cached[0].path !== c.req.path) {
+        throw new HTTPException(409, { message: 'Idempotency-Key ya fue usada para otra operación.' });
+      }
+      return { status: cached[0].statusCode, data: cached[0].response };
+    }
     const output = await handler(tx, key);
     const body = { success: true, data: output.data };
     await tx.insert(mutationReceipts).values({

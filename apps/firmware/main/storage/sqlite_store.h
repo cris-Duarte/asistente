@@ -52,6 +52,8 @@ bool sqlite_store_task_set_status_local(const char *task_id, const char *status,
 bool sqlite_store_timer_start_local(const stored_time_entry_t *entry, const stored_mutation_t *mutation);
 bool sqlite_store_timer_stop_local(const stored_time_entry_t *entry, const stored_mutation_t *mutation);
 bool sqlite_store_timer_get_active(stored_time_entry_t *entry);
+bool sqlite_store_timer_upsert_server(const stored_time_entry_t *entry);
+bool sqlite_store_timer_clear_server_active(void);
 
 bool sqlite_store_has_pending_for(const char *entity, const char *resource_id);
 bool sqlite_store_mutation_next(int64_t now_ms, stored_mutation_t *mutation);

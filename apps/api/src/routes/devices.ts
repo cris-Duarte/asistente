@@ -21,7 +21,7 @@ router.post('/pairing/start', rateLimit(10, 60), async (c) => {
   let device = existing[0];
   if (device?.userId && !device.revokedAt) throw new HTTPException(409, { message: 'El dispositivo ya está vinculado.' });
   if (device) {
-    [device] = await db.update(devices).set({ name: input.name, firmwareVersion: input.firmwareVersion, revokedAt: null }).where(eq(devices.id, device.id)).returning();
+    [device] = await db.update(devices).set({ name: input.name, firmwareVersion: input.firmwareVersion }).where(eq(devices.id, device.id)).returning();
   } else {
     [device] = await db.insert(devices).values(input).returning();
   }

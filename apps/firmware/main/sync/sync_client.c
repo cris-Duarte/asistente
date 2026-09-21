@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "network/wifi_manager.h"
+#include "network/ota_updater.h"
 #include "nvs.h"
 #include "storage/sqlite_store.h"
 
@@ -21,6 +22,7 @@ static char s_pairing_id[40];
 static char s_polling_token[96];
 static int64_t s_next_pair_poll_ms;
 static int64_t s_next_pull_ms;
+static int64_t s_next_ota_check_ms;
 static sync_status_callback_t s_status_callback;
 static sync_tasks_callback_t s_tasks_callback;
 static sync_pairing_callback_t s_pairing_callback;
@@ -209,6 +211,42 @@ static bool json_task(cJSON *value, stored_task_t *task)
     return true;
 }
 
+static bool json_time_entry(cJSON *value, stored_time_entry_t *entry)
+{
+    cJSON *id = cJSON_GetObjectItem(value, "id");
+    cJSON *task_id = cJSON_GetObjectItem(value, "taskId");
+    cJSON *started_at = cJSON_GetObjectItem(value, "startedAt");
+    if (!cJSON_IsString(id) || !cJSON_IsString(task_id) || !cJSON_IsString(started_at)) return false;
+    memset(entry, 0, sizeof(*entry));
+    strlcpy(entry->id, id->valuestring, sizeof(entry->id));
+    strlcpy(entry->task_id, task_id->valuestring, sizeof(entry->task_id));
+    strlcpy(entry->started_at, started_at->valuestring, sizeof(entry->started_at));
+    cJSON *ended_at = cJSON_GetObjectItem(value, "endedAt");
+    cJSON *duration = cJSON_GetObjectItem(value, "durationSeconds");
+    cJSON *version = cJSON_GetObjectItem(value, "version");
+    cJSON *last_write = cJSON_GetObjectItem(value, "lastWriteId");
+    if (cJSON_IsString(ended_at)) strlcpy(entry->ended_at, ended_at->valuestring, sizeof(entry->ended_at));
+    entry->duration_seconds = cJSON_IsNumber(duration) ? duration->valueint : 0;
+    entry->version = cJSON_IsNumber(version) ? version->valueint : 1;
+    if (cJSON_IsString(last_write)) strlcpy(entry->last_write_id, last_write->valuestring, sizeof(entry->last_write_id));
+    return true;
+}
+
+static void pull_active_timer(void)
+{
+    char *response = NULL;
+    int status = request("GET", "/api/time-entries/active", NULL, NULL, 0, &response);
+    if (sync_is_success_status(status)) {
+        cJSON *json = cJSON_Parse(response);
+        cJSON *data = json ? cJSON_GetObjectItem(json, "data") : NULL;
+        stored_time_entry_t entry;
+        if (cJSON_IsObject(data) && json_time_entry(data, &entry)) sqlite_store_timer_upsert_server(&entry);
+        else if (cJSON_IsNull(data)) sqlite_store_timer_clear_server_active();
+        cJSON_Delete(json);
+    }
+    free(response);
+}
+
 static void pull_tasks(void)
 {
     char *response = NULL;
@@ -291,7 +329,14 @@ void sync_client_tick(void)
     }
     if (s_status_callback) s_status_callback(DEVICE_SYNC_SYNCING, "Sincronizando");
     flush_one();
-    if (now >= s_next_pull_ms) pull_tasks();
+    if (now >= s_next_pull_ms) {
+        pull_tasks();
+        pull_active_timer();
+    }
+    if (now >= s_next_ota_check_ms) {
+        ota_updater_check_manifest(CONFIG_PRODUCTIVITY_OTA_URL, s_token);
+        s_next_ota_check_ms = now + 6 * 60 * 60 * 1000;
+    }
 }
 
 void sync_client_force_pull(void)

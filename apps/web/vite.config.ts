@@ -29,7 +29,8 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,wasm,data}'],
+        maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
         navigateFallback: '/index.html',
         runtimeCaching: [{ urlPattern: /\/api\//, handler: 'NetworkOnly' }],
       },
@@ -40,6 +41,12 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
       '@productivity-assistant/shared': path.resolve(__dirname, '../../packages/shared/src'),
     },
+  },
+  // PGlite resolves its WASM and filesystem bundle relative to its ESM entry.
+  // Vite's dependency optimizer moves that entry without copying pglite.data,
+  // which makes the development server return the SPA shell for the bundle.
+  optimizeDeps: {
+    exclude: ['@electric-sql/pglite'],
   },
   server: {
     port: 5173,

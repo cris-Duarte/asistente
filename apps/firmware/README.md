@@ -24,6 +24,8 @@ Se generan `artifacts/st7121` y `artifacts/st7123`, cada uno con aplicación, bo
 
 El build ejecuta primero `test/native_tests.c` en el host del contenedor. El hardware debe validarse antes de activar eFuses o distribuir una actualización.
 
+El firmware consulta cada seis horas `CONFIG_PRODUCTIVITY_OTA_URL`. El manifiesto HTTPS debe contener `{"version":"1.2.0","secureVersion":2,"url":"https://.../firmware.bin"}`. Sólo instala una versión distinta cuyo `secureVersion` no retroceda; el bootloader valida la firma cuando se construye con `sdkconfig.production`.
+
 ## Seguridad de producción
 
 `sdkconfig.production` construye imágenes firmadas si se entrega la clave privada fuera del repositorio. Secure Boot, Flash Encryption y NVS Encryption permanecen apagados en la plantilla para que ningún build o primer arranque programe eFuses por accidente. La credencial y contraseña quedan protegidas por el cifrado de flash cuando esas funciones se activan durante el aprovisionamiento final.

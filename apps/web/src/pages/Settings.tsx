@@ -47,7 +47,7 @@ export function Settings() {
     setSessions(sessionItems);
     setDevices(deviceItems);
   }
-  useEffect(() => { if (section === 'security') void loadSecurity(); }, [section]);
+  useEffect(() => { if (section === 'security') void loadSecurity(); }, [section, user?.recoveryRequired]);
   useEffect(() => { document.documentElement.classList.toggle('dark', dark); localStorage.setItem('darkMode', String(dark)); }, [dark]);
 
   async function saveProfile() {

@@ -237,6 +237,60 @@ bool sqlite_store_timer_get_active(stored_time_entry_t *entry)
     return found;
 }
 
+bool sqlite_store_timer_upsert_server(const stored_time_entry_t *entry)
+{
+    if (!lock_db()) return false;
+    bool ok = exec_locked("BEGIN IMMEDIATE");
+    sqlite3_stmt *statement = NULL;
+    if (ok) {
+        ok = sqlite3_prepare_v2(s_db,
+            "DELETE FROM time_entries WHERE ended_at IS NULL AND id<>? AND NOT EXISTS("
+            "SELECT 1 FROM outbox WHERE entity='time_entries' AND resource_id=time_entries.id AND state!='done')",
+            -1, &statement, NULL) == SQLITE_OK;
+    }
+    if (ok) {
+        sqlite3_bind_text(statement, 1, entry->id, -1, SQLITE_TRANSIENT);
+        ok = sqlite3_step(statement) == SQLITE_DONE;
+    }
+    sqlite3_finalize(statement);
+    statement = NULL;
+    if (ok) {
+        ok = sqlite3_prepare_v2(s_db,
+            "INSERT INTO time_entries(id,task_id,started_at,ended_at,duration_seconds,version,last_write_id) VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id,started_at=excluded.started_at,ended_at=excluded.ended_at,"
+            "duration_seconds=excluded.duration_seconds,version=excluded.version,last_write_id=excluded.last_write_id "
+            "WHERE excluded.version>=time_entries.version AND NOT EXISTS(SELECT 1 FROM outbox WHERE entity='time_entries' "
+            "AND resource_id=excluded.id AND state!='done')",
+            -1, &statement, NULL) == SQLITE_OK;
+    }
+    if (ok) {
+        sqlite3_bind_text(statement, 1, entry->id, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 2, entry->task_id, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(statement, 3, entry->started_at, -1, SQLITE_TRANSIENT);
+        if (entry->ended_at[0]) sqlite3_bind_text(statement, 4, entry->ended_at, -1, SQLITE_TRANSIENT);
+        else sqlite3_bind_null(statement, 4);
+        if (entry->ended_at[0]) sqlite3_bind_int(statement, 5, entry->duration_seconds);
+        else sqlite3_bind_null(statement, 5);
+        sqlite3_bind_int(statement, 6, entry->version);
+        sqlite3_bind_text(statement, 7, entry->last_write_id, -1, SQLITE_TRANSIENT);
+        ok = sqlite3_step(statement) == SQLITE_DONE;
+    }
+    sqlite3_finalize(statement);
+    exec_locked(ok ? "COMMIT" : "ROLLBACK");
+    unlock_db();
+    return ok;
+}
+
+bool sqlite_store_timer_clear_server_active(void)
+{
+    if (!lock_db()) return false;
+    bool ok = exec_locked(
+        "DELETE FROM time_entries WHERE ended_at IS NULL AND NOT EXISTS(SELECT 1 FROM outbox "
+        "WHERE entity='time_entries' AND resource_id=time_entries.id AND state!='done')");
+    unlock_db();
+    return ok;
+}
+
 bool sqlite_store_has_pending_for(const char *entity, const char *resource_id)
 {
     if (!lock_db()) return true;

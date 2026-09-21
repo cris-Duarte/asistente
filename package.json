@@ -22,6 +22,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:e2e": "playwright test",
     "db:generate": "turbo run db:generate",
     "db:migrate": "turbo run db:migrate",
     "db:studio": "turbo run db:studio",
@@ -29,13 +30,14 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@playwright/test": "1.57.0",
+    "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
     "eslint": "^9.0.0",
-    "turbo": "^2.0.0",
     "prettier": "^3.3.0",
-    "typescript": "^5.5.0",
-    "@types/node": "^20.14.0"
+    "turbo": "^2.0.0",
+    "typescript": "^5.5.0"
   },
   "packageManager": "pnpm@9.4.0",
   "engines": {

@@ -63,6 +63,20 @@ static int64_t epoch_seconds(void)
     return (int64_t)now;
 }
 
+static int64_t iso_epoch(const char *value)
+{
+    int year, month, day, hour, minute, second;
+    if (sscanf(value, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6) return 0;
+    year -= month <= 2;
+    const int era = (year >= 0 ? year : year - 399) / 400;
+    const unsigned year_of_era = (unsigned)(year - era * 400);
+    const unsigned adjusted_month = (unsigned)(month + (month > 2 ? -3 : 9));
+    const unsigned day_of_year = (153 * adjusted_month + 2) / 5 + (unsigned)day - 1;
+    const unsigned day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    const int64_t days = (int64_t)era * 146097 + (int64_t)day_of_era - 719468;
+    return days * 86400 + hour * 3600 + minute * 60 + second;
+}
+
 static void refresh_tasks()
 {
     stored_task_t tasks[STORAGE_MAX_TASKS];
@@ -174,6 +188,7 @@ static void perform_timer(const Action &action)
             char start[24];
             snprintf(start, sizeof(start), "%" PRId64, epoch_seconds());
             sqlite_store_kv_set("timer_start_epoch", start);
+            sqlite_store_kv_set("timer_active_id", entry.id);
         }
     }
     refresh_tasks();
@@ -208,10 +223,20 @@ static void app_task(void *argument)
             stored_time_entry_t active = {};
             if (sqlite_store_timer_get_active(&active)) {
                 char start_value[24] = {0};
+                char active_id[37] = {0};
                 sqlite_store_kv_get("timer_start_epoch", start_value, sizeof(start_value));
+                sqlite_store_kv_get("timer_active_id", active_id, sizeof(active_id));
                 int64_t start = strtoll(start_value, nullptr, 10);
+                if (strcmp(active_id, active.id) != 0 || start <= 0) {
+                    start = iso_epoch(active.started_at);
+                    snprintf(start_value, sizeof(start_value), "%" PRId64, start);
+                    sqlite_store_kv_set("timer_start_epoch", start_value);
+                    sqlite_store_kv_set("timer_active_id", active.id);
+                }
                 ui_main_set_timer(&active, (uint32_t)(second > start ? second - start : 0), true);
             } else {
+                sqlite_store_kv_set("timer_start_epoch", "0");
+                sqlite_store_kv_set("timer_active_id", "");
                 ui_main_set_timer(nullptr, 0, false);
             }
         }

@@ -50,7 +50,15 @@ pnpm test
 pnpm build
 ```
 
-La CI repite estas comprobaciones, aplica migraciones en una base vacía, construye y levanta las imágenes Docker, ejecuta un respaldo/restauración y compila ambas matrices de firmware. No hay pasos de despliegue.
+El E2E de autenticación usa un autenticador WebAuthn virtual y el enlace emitido por `owner:init`:
+
+```bash
+E2E_BASE_URL=http://localhost:5173 \
+E2E_SETUP_URL='http://localhost:5173/setup#token=...' \
+pnpm test:e2e
+```
+
+La CI repite estas comprobaciones, aplica migraciones en una base vacía, construye y levanta las imágenes Docker, ejecuta el E2E, verifica un respaldo/restauración y compila ambas matrices de firmware. No hay pasos de despliegue.
 
 ## Sincronización y conflictos
 
@@ -111,3 +119,4 @@ La integración física pendiente se valida en una Tab5: táctil de ambas revisi
 | `COOKIE_SECURE` | Debe permanecer `true` fuera del modo local |
 | `ELECTRIC_SECRET` | Sólo API y Electric; nunca se incluye en el cliente |
 | `CONFIG_PRODUCTIVITY_API_URL` | API HTTPS que usa el firmware |
+| `CONFIG_PRODUCTIVITY_OTA_URL` | Manifiesto HTTPS de firmware firmado (`version`, `secureVersion`, `url`) |

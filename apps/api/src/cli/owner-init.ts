@@ -14,11 +14,8 @@ function argument(name: string): string | undefined {
 }
 
 async function main() {
-  const email = argument('email') ?? process.env.OWNER_EMAIL;
-  const name = argument('name') ?? process.env.OWNER_NAME;
-  if (!email || !name) {
-    throw new Error('Uso: pnpm owner:init -- --email tu@email.com --name "Tu nombre"');
-  }
+  const email = argument('email') ?? process.env.OWNER_EMAIL ?? 'owner@local';
+  const name = argument('name') ?? process.env.OWNER_NAME ?? 'Propietario';
   const [{ db, passkeyCredentials, setupTokens, users }, { count, eq }, { hashSecret, randomToken }] = await Promise.all([
     import('@productivity-assistant/db-schema'),
     import('drizzle-orm'),
